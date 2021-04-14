@@ -1,0 +1,1 @@
+cmd = data/derived_data/Saccharomyces_cerevisiae.R64-1-1.89_genes_upstream_upregulated_Hog1_dependent_toHOMER.bed sacCer3 results/S_cerevisiae/HOMER/ -size given -bg data/derived_data/Saccharomyces_cerevisiae.R64-1-1.89_genes_upstream_upregulated_Hog1_independent_toHOMER.bed

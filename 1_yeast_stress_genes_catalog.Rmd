@@ -1,0 +1,457 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+
+# Stress-gene consensus
+
+We have 5 independent RNA-Seq experiments with triplicates samples: WT, NaCl (0.4 M, 15 min).
+
+* __Objective__: Define consensus osmorresponsive genes for future use. In addition, define Hog1-dependent genes.
+
+
+## Read and preprocess data
+For each experiment, read count files (Trimmed FASTQ files, aligned with HISAT2 and summarized at gene level with FeatureCounts), eliminate irrelevant information (chr, length, strand, etc) and join samples for analysis with DESeq2.
+
+```{r, eval=TRUE}
+# Experiments directory
+countsDir <- "data/original_data/S_cerevisiae_counts/"
+# List all experiments (e.g. S_Cerevisiae_Carme, S_Cerevisiae_H2A_T77, S_Cerevisiae_H4_Mutants)
+experiments <- dir(countsDir)
+
+# Create derived_data directory for output
+dir.create("data/derived_data/counts/", recursive = T)
+
+# For each experiment, create a data frame an put the counts for each sample
+for (i in 1:length(experiments)){
+  experimentName <- experiments[i]
+  experimentPath <- paste0(countsDir, experimentName, "/")
+  experimentNames <- dir(experimentPath)
+  experimentFiles <- paste0(experimentPath, experimentNames)
+  # Data frame with 7126 rows (i.e all genes annotated in counts files)
+  experimentCounts <- data.frame(Geneid = rep(NA, 7126), 
+                                 stringsAsFactors = F)
+  for (j in 1:length(experimentFiles)){
+    # Read counts file
+    rawReadCounts <- read.table(experimentFiles[j], 
+           #row.names = 1,
+           header = T,
+           stringsAsFactors = F)
+    # Adding gene names to experimentCounts data frame for merging samples by gene id, only the first time
+    if (all(is.na(experimentCounts$Geneid))){
+    experimentCounts$Geneid <- rawReadCounts$Geneid
+    }
+    # Eliminating columns corresponding to Chr, Start, End, Strand and Length --> Retain them for later
+    rawReadCounts <- rawReadCounts[, c(1,7)]
+    
+    # Eliminating innecesary information from samples names
+    colnames(rawReadCounts)[2] <- unlist(lapply(strsplit(colnames(rawReadCounts)[2], ".", fixed = TRUE), function(x) return(tail(x,2)[1])))
+    
+    # Add counts to experimentCounts data frame
+    experimentCounts <- merge(experimentCounts, rawReadCounts, by = "Geneid", sort = F)
+  }
+  # Output file
+  countsFileName <- paste0("data/derived_data/counts/", experimentName, ".counts")
+  write.table(experimentCounts, 
+              file = countsFileName, 
+              quote = F, 
+              sep = "\t", 
+              append = F, 
+              row.names = F)
+}
+```
+
+
+```{r eval=TRUE}
+# Directory of experiment files
+experimentDir <- "data/derived_data/counts/"
+experimentsProcessed <- dir(experimentDir, full.names = T)
+
+
+# Merge experiments
+for (i in experimentsProcessed){
+  print(i)
+  if(!exists("mergedData")){
+    mergedData = read.table(i, header = T, sep = '\t', check.names = F, stringsAsFactors = F)
+  } else {
+    tmpData = read.table(i, header = T, sep = '\t', check.names = F, stringsAsFactors = F)
+    mergedData = merge(mergedData, tmpData, by = "Geneid")
+    rm(tmpData)
+  }
+}
+
+## Column gene to rownames
+mergedData = tibble::column_to_rownames(mergedData, var = "Geneid")
+
+# Filter KO samples in merged files
+sampleClassification = read.delim("data/original_data/sample_classification.tab", stringsAsFactors = F, row.names = 1)
+mergedData  = mergedData[, row.names(sampleClassification)]
+
+# Write merged data
+write.table(mergedData, file = "data/derived_data/rawReadCounts_merged_no_mutants.tab", quote = F, row.names = T, sep = "\t",col.names = NA)
+```
+
+
+## Modelling RNA-seq data
+
+```{r, eval = TRUE}
+# Load required library
+library(biomaRt)
+
+# Load required function
+source("functions/DESeqQcResBatchExt.R")
+
+# Parameters for conversion of ensembl ids to external gene id when available
+sc <- useMart("ensembl", dataset = "scerevisiae_gene_ensembl", host = "http://may2017.archive.ensembl.org")
+originalId <- "ensembl_gene_id"
+destinationId <- "external_gene_name"
+
+# Genes to remark
+genesInterest <- c("HSP12", "STL1", "CTT1", "ALD3", "ARO9", "ENA1", "GRE2")
+# Fold change threshold
+lfcThreshold = 1
+# Output directory
+dir.create("results/S_cerevisiae/DESeq2", showWarnings = F, recursive = T)
+
+
+# Prefix for output files
+outputPrefix <- "results/S_cerevisiae/DESeq2/S_cerevisiae_merged_salt"
+plotsPrefix <- paste0("S_cerevisiae_merged_salt_lfc", lfcThreshold)
+
+# Execute DESeq2 analysis 
+DESeqQcResBatchExt(inputData = mergedData, 
+                 samples = sampleClassification, 
+                 design = ~batch + condition, 
+                 variable = "salt", 
+                 betaPrior = T, 
+                 colGroups = c("condition", "batch"),
+                 pAdjThreshold = 0.05, 
+                 lfcThreshold = lfcThreshold, 
+                 biomart = sc, 
+                 originalId = originalId, 
+                 destinationId = destinationId, 
+                 genesInterest = genesInterest,
+                 outputPrefix = outputPrefix)
+```
+
+
+
+## Gather list of osmostress-responsive genes
+
+Write the results in a convenient format for the rest of the analysis pipeline
+```{r, eval = T}
+dir.create("results/S_cerevisiae/responsive_genes/", showWarnings = F)
+for (direct in c("up", "down")){
+    res = read.delim("results/S_cerevisiae/DESeq2/S_cerevisiae_merged_salt_lfc1_p05_results.tsv", stringsAsFactors = F, check.names = F)
+    if(direct == "up"){ids = (res$padj <= 0.05 & res$log2FoldChange >= 1)} else if(direct == "down"){ids = res$padj <= 0.05 & res$log2FoldChange <= -1}
+    resF = res[which(ids),]
+    write.table(resF[, 1:2], file = paste0("results/S_cerevisiae/responsive_genes/responsive_genes_salt_lfc1_", direct, "_merged.tsv"), sep = "\t", quote = F, row.names = F)
+  }  
+```
+
+
+## Hog1 dependency
+### Hog1 effect in basal conditions
+First of all we inspect the effect of mutating Hog1 in basal conditions.
+
+**Objective**: Is the mutant affecting basal transcription?. Assess changes/defects in transcription due to mutant genotype.
+
+```{r, eval=TRUE}
+library(dplyr)
+library(DESeq2)
+
+dir.create("results/S_cerevisiae/hog1_dependency/", showWarnings = F)
+
+# Read data
+samplesMariona <- read.delim("data/original_data/sample_classification_Mariona_mutant.tab", 
+                      stringsAsFactors = T, 
+                      row.names = 1)
+
+countsMariona <- read.delim("data/derived_data/counts/S_cerevisiae_Mariona.counts", 
+                            stringsAsFactors = F, 
+                            row.names = 1, 
+                            check.names = F)
+
+# Putting WT as reference, by default is in alphabetical order, being the first the reference, reference implies denominator
+samplesMariona$genotype <- relevel(samplesMariona$genotype, ref = "WT")
+
+# Putting no_stress as reference
+samplesMariona$condition <- relevel(samplesMariona$condition, ref = "basal")
+
+# Obtain gene symbol from ensembl id
+geneSymbols <- getBM(attributes = c(originalId, destinationId), 
+        filters = originalId, 
+        values = row.names(countsMariona),
+        mart = sc)
+
+# Subseting basal samplesMariona
+basalSamples <- subset(samplesMariona, condition == "basal")
+basalRawCounts <- countsMariona[, row.names(basalSamples)]
+
+# Putting into DESeq object
+ddsBasal <- DESeqDataSetFromMatrix(countData = basalRawCounts, colData = basalSamples, design = ~ genotype)
+
+# Run the DESeq pipeline
+ddsBasal <- DESeq(ddsBasal, betaPrior = T)
+
+# Obtaining results
+resBasal <- results(ddsBasal, 
+                    lfcThreshold = 1, 
+                    altHypothesis = "greaterAbs", 
+                    alpha = 0.05)
+
+dataOut <- as.data.frame(resBasal)
+
+# Generate new column with comName
+dataOut$comName <- geneSymbols[match(row.names(dataOut), geneSymbols$ensembl_gene_id), "external_gene_name"]
+
+# Put comName as first column
+dataOut <- dataOut %>%
+  dplyr::select(comName, everything())
+
+# Row names (gene name) as first colum
+dataOut <- tibble::rownames_to_column(dataOut, var = "name")
+
+write.table(x = dataOut,
+            file = "results/S_cerevisiae/hog1_dependency/results_basal_HOG1WT_vs_HOG1KO.tab",
+            quote = F, 
+            row.names = F, 
+            sep = "\t")
+
+```
+
+### Hog1 KO in osmostress conditions
+Then, we study the effect of Hog1 KO in osmostress treatment
+
+**Objective**: Assess the effect of HOG1 mutant upon osmostress treatment. Study the behaviour of osmostress responsive genes in a HOG1 mutant under osmostress conditions.
+
+```{r, eval=TRUE}
+# Putting into DESeq object (genotype, treatment and the interaction)
+dds <- DESeqDataSetFromMatrix(countData = countsMariona, colData = samplesMariona, design = ~ genotype + condition + genotype:condition)
+
+# Run the DESeq pipeline for the whole design
+dds <- DESeq(dds, betaPrior = FALSE) # betaPrior = F needed for designs with interactions
+
+# Regularized log transformation for PCA
+rld <- rlogTransformation(dds)
+
+# Only top500 by variance as in DESEq2
+rlogCountsS = as.matrix(assay(rld))
+topVarIds = order(rowVars(rlogCountsS), decreasing = T)[1:500]
+# Obtain PCs
+pcag <- prcomp(t(rlogCountsS[topVarIds,]))
+# Store PCs in a data frame
+scores <- as.data.frame(pcag$x)
+# Summary prpcomp
+info <- summary(pcag)
+infoVar <- as.data.frame(info$importance)
+# Varianze explained by each PC
+PC1Var <- round(infoVar$PC1[2] * 100)
+PC2Var <- round(infoVar$PC2[2] * 100)
+# Add group info
+sampData = as.data.frame(colData(rld))
+scores[,"group"] <- apply(sampData[,c("condition", "genotype")], 1, paste, collapse = ":")
+
+write.table(x = scores, file = "results/S_cerevisiae/hog1_dependency/hog1Dependency_pcagg_data.tsv", sep = "\t", quote = F, row.names = T, col.names = NA)
+
+# Obtaining results
+res <- results(dds, 
+               lfcThreshold = 0.25,
+               altHypothesis = "greaterAbs", 
+               alpha = 0.05)
+
+# Add gene names
+# Add -log10 padj
+# Add lfc
+datac <- data.frame(gene = row.names(res),
+                      padj = res$padj,
+                      lpadj = -log10(res$padj),
+                      lfc = res$log2FoldChange)
+
+# Add comGeneNames
+datac$comName <- geneSymbols[match(datac$gene, geneSymbols$ensembl_gene_id), "external_gene_name"]
+
+# DESeq2 analysis only for WT samples
+WTsamples <- subset(samplesMariona, genotype == "WT")
+WTRawCounts <- countsMariona[, row.names(WTsamples)]
+
+# Putting into DESeq object
+ddsWT <- DESeqDataSetFromMatrix(countData = WTRawCounts, colData = WTsamples, design = ~condition)
+
+# Run the DESeq pipeline
+ddsWT <- DESeq(ddsWT, betaPrior = FALSE) # For consistency
+
+# Obtaining results
+resWT <- results(ddsWT, 
+               lfcThreshold = 1, 
+               altHypothesis = "greaterAbs", 
+               alpha = 0.05)
+
+# Add gene names
+# Add -log10 padj
+# Add lfc
+dataWT <- data.frame(gene = row.names(resWT),
+                      padj = resWT$padj,
+                      lpadj = -log10(resWT$padj),
+                      lfc = resWT$log2FoldChange)
+
+# Analysis only for mutant samples
+Mutsamples <- subset(samplesMariona, genotype == "HOG1_KO")
+MutRawCounts <- countsMariona[, row.names(Mutsamples)]
+
+# Putting into DESeq object
+ddsMut <- DESeqDataSetFromMatrix(countData = MutRawCounts, colData = Mutsamples, design = ~condition)
+
+# Run the DESeq pipeline
+ddsMut <- DESeq(ddsMut, betaPrior = FALSE) # For consistency
+
+# Obtaining results
+resMut <- results(ddsMut, 
+               lfcThreshold = 1, 
+               altHypothesis = "greaterAbs", 
+               alpha = 0.05)
+
+# Add gene names
+# Add -log10 padj
+# Add lfc
+dataMut <- data.frame(gene = row.names(resMut),
+                      padj = resMut$padj,
+                      lpadj = -log10(resMut$padj),
+                      lfc = resMut$log2FoldChange)
+
+# Create data frame with all information
+# lfc_interaction is the difference between lfc_S_vs_NS_KO and lfc_S_vs_NS_WT
+dataDep <- data.frame(gene = datac$gene,
+          lfc_interaction = datac$lfc, 
+          padj_interaction = datac$padj, 
+          log2FoldChange_Stress_Vs_NoStress_WT = dataWT$lfc, 
+          log2FoldChange_Stress_Vs_NoStress_KO = dataMut$lfc,
+          padj_Stress_Vs_NoStress_WT = dataWT$padj,
+          padj_Stress_Vs_NoStress_KO = dataMut$padj)
+
+# Obtain normalized counts and reorder
+countsDf <- counts(dds, normalized = T)
+countsDf <- countsDf[, c(4:9, 1:3, 10:12)]
+
+dataDep <- cbind(dataDep, countsDf)
+
+# Save output
+write.table(dataDep, 
+            "results/S_cerevisiae/hog1_dependency/results_hog1Dependency.tab", 
+            quote = FALSE, 
+            sep = "\t", 
+            row.names = FALSE)
+
+
+# Extra column for indicating if a gene is stress responsive
+dataDep <- dataDep %>%
+   mutate(stressGene = ifelse(padj_Stress_Vs_NoStress_WT <= 0.05 & log2FoldChange_Stress_Vs_NoStress_WT >= 1, 
+                              yes = "Upregulated", 
+                              no = ifelse(padj_Stress_Vs_NoStress_WT <= 0.05 & log2FoldChange_Stress_Vs_NoStress_WT <= -1, 
+                                          yes = "Downregulated", 
+                                          no = "Unresponsive")))
+ 
+ # Extra column for indicating if a gene is affected in the mutant considering stress responsive
+ dataDep <- dataDep %>%
+   mutate(mutantDep = ifelse(stressGene == "Upregulated" & lfc_interaction <= -0.25 & padj_interaction <= 0.05, 
+                             yes = "Less upregulated", 
+                             no = ifelse(stressGene == "Downregulated" & lfc_interaction >= 0.25 & padj_interaction <= 0.05, 
+                                         yes = "Less downregulated", 
+                                         no = "-")))
+
+ 
+ # Eliminate unresponsive genes from the plot
+ mutantResPlot <- subset(dataDep, stressGene != "Unresponsive")
+ 
+ # Save the results
+ mutantResPlot$comName <- geneSymbols[match(mutantResPlot$gene, geneSymbols$ensembl_gene_id), "external_gene_name"]
+ mutantResSave <- mutantResPlot %>%
+   dplyr::select(gene, comName, 2:7, stressGene, mutantDep, everything())
+
+ 
+ write.table(mutantResSave, 
+             file = "results/S_cerevisiae/hog1_dependency/hog1Dependency_boxplot_data.tsv", 
+             quote = F, 
+             sep = "\t")
+ 
+ # Save the list of genes
+ lessUpregulated <- subset(mutantResSave, mutantDep == "Less upregulated", select = c(gene, comName))
+ lessDownregulated <- subset(mutantResSave, mutantDep == "Less downregulated", select = c(gene, comName))
+ 
+ write.table(lessUpregulated, 
+             "results/S_cerevisiae/hog1_dependency/Hog1Dependent_listOfGenes_lessUpregulated_KO_vs_WT.txt", 
+             quote = F, 
+             sep = "\t", 
+             row.names = F)
+ 
+ write.table(lessDownregulated, 
+             "results/S_cerevisiae/hog1_dependency/Hog1Dependent_listOfGenes_lessDownregulated_KO_vs_WT.txt", 
+             quote = F, 
+             sep = "\t", 
+             row.names = F)
+
+```
+
+### Gather list of Hog1 dependent genes
+Hog1 dependency in the desired format
+
+```{r, eval=TRUE}
+# Read and define responsive genes
+upregulatedMerged <- read.delim("results/S_cerevisiae/responsive_genes/responsive_genes_salt_lfc1_up_merged.tsv", stringsAsFactors = F)
+downregulatedMerged <- read.delim("results/S_cerevisiae/responsive_genes/responsive_genes_salt_lfc1_down_merged.tsv", stringsAsFactors = F)
+
+lessUpregulatedListOfGenesMerged <- subset(lessUpregulated, gene %in% upregulatedMerged$ensembl_gene_id)
+lessDownregulatedListOfGenesMerged <- subset(lessDownregulated, gene %in% downregulatedMerged$ensembl_gene_id)
+
+write.table(lessUpregulatedListOfGenesMerged, file = "results/S_cerevisiae/hog1_dependency/Hog1Dependent_listOfGenes_lessUpregulated_KO_vs_WT_lfc1_merged.txt", quote = F, row.names = F, sep = "\t")
+write.table(lessDownregulatedListOfGenesMerged, file = "results/S_cerevisiae/hog1_dependency/Hog1Dependent_listOfGenes_lessDownregulated_KO_vs_WT_lfc1_merged.txt", quote = F, row.names = F, sep = "\t")
+```
+
+## Gather the catalog (hyperosmotic stress + Hog1 dependency)
+
+Gather results together
+
+```{r eval=TRUE}
+stressConsensusTable <- data.frame(ensembl_gene_id = geneSymbols$ensembl_gene_id, 
+                                     external_gene_name = geneSymbols$external_gene_name, 
+                                     stringsAsFactors = F)
+  
+  
+stressConsensusTable <- stressConsensusTable %>%
+    mutate(salt = ifelse(ensembl_gene_id %in% upregulatedMerged$ensembl_gene_id, 
+                         yes = "upregulated", 
+                         no = ifelse(ensembl_gene_id %in% downregulatedMerged$ensembl_gene_id, 
+                                     yes = "downregulated", 
+                                     no = "unresponsive")))
+  
+
+stressConsensusTable <- stressConsensusTable %>%
+    mutate(hog1DepSalt= ifelse(ensembl_gene_id %in% lessUpregulatedListOfGenesMerged$gene,
+                         yes = "less_upregulated", 
+                         no = ifelse(ensembl_gene_id %in% lessDownregulatedListOfGenesMerged$gene, 
+                                     yes = "less_downregulated", 
+                                     no = "-")))
+
+
+stressConsensusTable <- stressConsensusTable %>%
+    mutate(hog1DepSaltExt = ifelse(salt == "unresponsive", 
+                                   yes = "unresponsive", 
+                                   no = ifelse(salt == "upregulated", 
+                                               yes = ifelse(hog1DepSalt == "less_upregulated", 
+                                                                               yes = "upregulated_Hog1_dependent", 
+                                                                               no = "upregulated_Hog1_independent"), 
+                                               no = ifelse(salt == "downregulated", 
+                                                           yes = ifelse(hog1DepSalt == "less_downregulated", 
+                                                                        yes = "downregulated_Hog1_dependent", no = "downregulated_Hog1_independent"), 
+                                                           no = "unresponsive"))))
+
+stressConsensusTable <- stressConsensusTable[,-4]
+  
+write.table(stressConsensusTable, 
+              "results/S_cerevisiae/stressConsensusTable.tab", 
+              sep = "\t", 
+              quote = F, 
+              row.names = F)
+  
+
+```

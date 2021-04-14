@@ -1,0 +1,1098 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+# Paper figures
+## Setup required libraries and directories
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(ggbeeswarm)
+library(ggtext)
+library(ggsci)
+library(LSD)
+library(dplyr)
+library(corrplot)
+library(ROCR)
+library(ggiraphExtra)
+library(RColorBrewer)
+library(Hmisc)
+library(reshape2)
+library(circlize)
+library(ComplexHeatmap)
+library(ggridges)
+
+
+dir.create("figures", showWarnings = FALSE)
+```
+
+
+
+## Figure 1
+### DE volcano plot
+```{r, eval = TRUE}
+volcanoData = read.delim("results/S_cerevisiae/DESeq2/S_cerevisiae_merged_salt_lfc1_p05_results.tsv", stringsAsFactors = F)
+
+genesInterest = c("ARO9", "GRE2", "CTT1", "ENA1", "ALD3", "STL1", "HSP12")
+
+
+# Obtain data for plot
+dataExt <- data.frame(gene = volcanoData$ensembl_gene_id,
+                   geneExt = volcanoData$external_gene_name,
+                   padj = volcanoData$padj,
+                   lpadj = -log10(volcanoData$padj),
+                   lfc = volcanoData$log2FoldChange)
+
+# Remove rows that have NA values
+dataExt <- na.omit(dataExt)
+
+dataExt <- dataExt %>%
+  mutate(threshold = ifelse(dataExt$lfc>=1 & dataExt$padj <= 0.05, yes = "Upregulated", no = ifelse(dataExt$lfc<=-1 & dataExt$padj <= 0.05, yes = "Downregulated", no = "No change")))
+
+# Changing -inf lpadj to 300
+dataExt[is.infinite(dataExt$lpadj), "lpadj"] <- 300
+
+# Annotation for sign genes and log2fc <= -1
+down <- sum(dataExt$padj <= 0.05 & dataExt$lfc <= -1, na.rm = TRUE)
+downAnn <- paste(paste("Downregulated:\n", down), "genes")
+
+# Annotation for sign genes and log2fc >= 1
+up <- sum(dataExt$padj <= 0.05 & dataExt$lfc >= 1, na.rm = TRUE)
+upAnn <- paste(paste("Upregulated:\n", up), "genes")
+
+p <- ggplot(dataExt, aes(x = lfc, y = lpadj)) +
+  geom_point(aes(color = factor(threshold)), size = 1.75, alpha = 0.8, na.rm = T) +
+  theme_bw(base_size = 9, base_family = "Arial") +
+  theme(legend.position = "none") + 
+  theme(axis.title=element_text(size=9),
+        axis.text = element_text(colour = "black", size = 9),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 9)) +
+  xlab(expression(log[2]("Stress"/ "Basal"))) +
+  xlim(c((min(dataExt$lfc) - 0.5), (max(dataExt$lfc + 0.5)))) +
+  ylab(expression(-log[10]("adjusted p-value"))) +
+  geom_vline(xintercept = 1, colour = "grey42", linetype = "dashed") + 
+  geom_vline(xintercept = -1, colour = "grey42", linetype = "dashed") + 
+  geom_hline(yintercept = -log10(0.05), colour = "grey42", linetype = "dotdash") + 
+  annotate(geom = "text", 
+           label = downAnn, 
+           fontface = 1,
+           family= theme_get()$text[["family"]], 
+           size= 9*0.35, # To have pt in mm multiply by 0.35
+           x = -7.5, y = min(dataExt$lpadj) + 0.5, hjust = .5) +
+  annotate(geom = "text", 
+           label = upAnn, 
+           fontface = 1,
+           family= theme_get()$text[["family"]], 
+           size= 9*0.35,
+           x = 6.5, y = min(dataExt$lpadj) + 0.5, hjust = .3) +
+  geom_text_repel(
+    data = subset(dataExt, geneExt %in% genesInterest),
+    aes(label = geneExt),
+    size = 9*0.35, 
+    fontface = 'italic',
+    force = 10,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")) + 
+  scale_color_manual(values = c("Upregulated" = "#D75565", 
+                                "Downregulated" = "#6CA699", 
+                                "No change" = "gray")) +
+  ggtitle("Osmostress-responsive genes catalog")
+
+# Plot and scale y-axis with log1p function for visualize better taking into account high values
+figVolc <- p + scale_y_continuous(trans = "log1p") + scale_x_continuous(limits = c(-13,13))
+figVolc
+ggsave("figures/S_cerevisiae_merged_salt_lfc1_p05_volcano_plot.pdf", width = 2.9, height = 2.9, device = cairo_pdf)
+```
+
+## Figure S1
+### PCA batch
+
+```{r, eval=TRUE}
+source("functions/PCABatchExt.R")
+# Reading data
+scores = read.delim("results/S_cerevisiae/DESeq2/S_cerevisiae_merged_salt_lfc1_p05_batchRemoved_pcagg_data.tsv", 
+                    stringsAsFactors = F, 
+                    row.names = 1)
+# Fixing labels
+scores$group = gsub("basal", "Basal", scores$group)
+scores$group = gsub("salt", "Stress", scores$group)
+scores$group = gsub("S_cerevisiae_Carme", " Studer *et al.,* 2016 (GSE80512)", scores$group)
+scores$group = gsub("S_cerevisiae_H2A_T77", " This study #1", scores$group)
+scores$group = gsub("S_cerevisiae_H4_mutants", " Viéitez *et al.,* 2020 (GSE130549)", scores$group)
+scores$group = gsub("S_cerevisiae_Santi", " Silva *et al.,* 2017 (GSE98352)", scores$group)
+scores$group = gsub("S_cerevisiae_Mariona_with_mutant", " This study #2", scores$group)
+scores$group = factor(scores$group, levels = c("Basal: Silva *et al.,* 2017 (GSE98352)", "Basal: Studer *et al.,* 2016 (GSE80512)", 
+                                "Basal: Viéitez *et al.,* 2020 (GSE130549)", "Basal: This study #1",
+                                "Basal: This study #2", 
+                                "Stress: Silva *et al.,* 2017 (GSE98352)", "Stress: Studer *et al.,* 2016 (GSE80512)", 
+                                "Stress: Viéitez *et al.,* 2020 (GSE130549)", "Stress: This study #1",
+                                "Stress: This study #2"))
+
+# Split groups
+scores$grp = as.factor(unlist(lapply(strsplit(as.character(scores$group), ":"), function(x) return(x[1]))))
+scores$grp2 = unlist(lapply(strsplit(as.character(scores$group), ":"), function(x) return(x[2])))
+scores$grp2 = factor(scores$grp2, levels = c(" Silva *et al.,* 2017 (GSE98352)", " Studer *et al.,* 2016 (GSE80512)", " Viéitez *et al.,* 2020 (GSE130549)", " This study #1", " This study #2"))
+
+# Execute function
+ggPca <- PCABatchExt(x = scores,
+                 groupName1 = "grp", 
+                 groupName2 = "grp2")
+ggPca = ggPca + theme(legend.text = element_markdown(), legend.title = element_blank())
+#Putting PC1Var and PC2Var manually. This is computed in DESeqQCResBatchExt script. 
+PC1Var = 96
+PC2Var = 2
+ggPca <- ggPca + xlab(paste0("PC1: ", PC1Var, "% variance")) + ylab(paste0("PC2: ", PC2Var, "% variance")) + guides(shape = FALSE)
+ggsave(ggPca, filename = "figures/S_cerevisiae_merged_salt_lfc1_p05_batchRemoved_pcagg_fixed.pdf", width = 6.5, height = 2.5, device = cairo_pdf)  
+```
+### Comparison with previous experiments
+
+```{r, eval = TRUE}
+fcPrevPlot = read.delim("results/S_cerevisiae/fcComparison_previousData.tab", stringsAsFactors = F)
+
+cairo_pdf("figures/fcComparison_RNAseq_vs_Gasch_salt.pdf", width = 4.5, height = 4.5, family = "Arial")
+par(mar = c(2.1, 2.1, 1.1, 1.1), ps = 9, tcl = -0.1, mgp = c(1.5, 0.1, 0))
+comparisonplot(fcPrevPlot$RNASeq, fcPrevPlot$Gasch, cor = FALSE, xlim = c(-6,11), ylim = c(-4,6), main = "", 
+                    xlab = "RNA-seq catalog\n(log2 fold change)", 
+                    ylab = "Gasch et al., 2000\n(log2 fold change)")
+dev.off()
+
+cairo_pdf("figures/fcComparison_RNAseq_vs_tiling_salt.pdf", width = 4.5, height = 4.5, family = "Arial")
+par(mar = c(2.1, 2.1, 1.1, 1.1), ps = 9, tcl = -0.1, mgp = c(1.5, 0.1, 0))
+comparisonplot(fcPrevPlot$RNASeq, fcPrevPlot$Tilings, cor = FALSE, xlim = c(-6,11), ylim = c(-15, 20), main = "", cex.axis = 1,
+                    xlab = "RNA-Seq catalog (log2 fold change)",
+                    ylab = "Nadal-Ribelles et al., 2014 (log2 fold change)")
+dev.off()
+```
+
+## Figure 2
+### Heatmap of features
+
+```{r, eval = TRUE}
+# Load required function
+source("functions/comparisonsHeatmapAnnotated.R")
+# Read data
+stress.properties.df <- read.delim("results/S_cerevisiae/stressConsensus_Properties_Full_Table.tsv", stringsAsFactors = F)
+# Feature info data frame
+prop.names.format <- read.delim("data/original_data/features_info.txt", stringsAsFactors = F)
+# Properties we want to plot
+properties.toPlot <- colnames(stress.properties.df[,5:ncol(stress.properties.df)])
+# Heatmap summarizing all the comparisons
+comparisonsHeatmapAnnotated(propertiesStressData = stress.properties.df, 
+                     properties = properties.toPlot, 
+                     columnDep = "salt", 
+                     random = 0, 
+                     sourceMolTable = prop.names.format, 
+                     outWidth =  4.5, 
+                     outHeight = 6, 
+                     outTable = "results/S_cerevisiae/medianValues_features_stressGroups.tab")
+```
+
+### Ridges plot of selected features
+
+```{r, eval = TRUE}
+# Filter unnecesary columns
+stress.properties.df.f = stress.properties.df %>% 
+  dplyr::select(-c(ensembl_gene_id, external_gene_name, hog1DepSaltExt))
+
+stress.properties.df.f$salt = Hmisc::capitalize(stress.properties.df.f$salt)
+stress.properties.melt = melt(stress.properties.df.f)
+stress.properties.melt$feature = prop.names.format[match(stress.properties.melt$variable, prop.names.format$Property), "Property_formatted_short"]
+stress.properties.melt$salt = factor(stress.properties.melt$salt, levels = c("Upregulated", "Downregulated", "Unresponsive"))
+
+# Select features to be displayed in main figure
+selectedFeatures = c("Broad conservation", "Number of transcription factors")
+
+stress.properties.melt.sel = stress.properties.melt %>%
+  dplyr::filter(feature %in% selectedFeatures)
+
+ggplot(stress.properties.melt.sel, aes(x = value, fill = salt, y = salt), color = salt) + 
+  geom_density_ridges(alpha = 0.8) + 
+  facet_wrap(~feature, nrow = 2, scales = "free") + 
+  theme_bw(base_family = "Arial", base_size = 9) + theme(strip.text = element_text(face = "bold", size = 9),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          panel.border = element_rect(colour = "black"),
+          legend.position = "none", 
+          axis.title=element_text(size=9),
+          axis.text = element_text(colour = "black", size = 9),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 9),
+          panel.spacing = unit(16, "pt")) + 
+  scale_fill_manual(values = rev(c("gray", "#6CA699", "#D75565"))) + 
+  xlab("") + 
+  ylab("")
+ggsave("figures/ridgesPlot_selectedProperties_salt.pdf", width = 2.2, height = 4, device = cairo_pdf)
+```
+
+
+## Figure S2
+
+### Ridges plot of rest features
+
+```{r, eval = TRUE}
+# Plot rest figures in Supplement
+stress.properties.melt.rest = stress.properties.melt %>%
+  dplyr::filter(!feature %in% selectedFeatures)
+
+ggplot(stress.properties.melt.rest, aes(x = value, fill = salt, y = salt)) + 
+  geom_density_ridges(alpha = 0.8) + 
+  facet_wrap(~feature, ncol = 4, scales = "free") + 
+  theme_bw(base_family = "Arial", base_size = 9) + theme(strip.text = element_text(face = "bold", size = 9),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          panel.border = element_rect(colour = "black"),
+          axis.title=element_text(size=9),
+          axis.text = element_text(colour = "black", size = 9),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 9),
+          legend.position = "none",
+          panel.spacing = unit(16, "pt"),
+          plot.margin = unit(c(5.1, 6.1, 5.1, 5.1), units = "points")) +
+  scale_fill_manual(values = rev(c("gray", "#6CA699", "#D75565"))) + 
+  xlab("") + 
+  ylab("")
+ggsave("figures/ridgesPlot_restProperties_salt.pdf", width = 7.5, height = 10.5, device = cairo_pdf)
+```
+
+## Figure 3
+### Multinomial logistic regression: ROC curve
+
+```{r, eval = TRUE}
+load("data/rdata/roc_curve_multinomial_scerevisiae_random_0.rda", verbose = TRUE)
+# Specify the different classes 
+classes <- c("unresponsive", "downregulated", "upregulated")
+pretty_colours <- c("gray", "#6CA699", "#D75565")
+# Store auc
+auc <- c()
+cairo_pdf(paste0("figures/roc_multinomialLogistic_train_valid_salt_random_0.pdf"), width = 2.5, height = 2.5, family = "Arial")
+par(mar = c(2.1, 2.1, 1.1, 1.1), ps = 9, tcl = -0.1, mgp = c(1, 0.1, 0))
+# For each class
+for (i in 1:length(classes)){
+ # Define which observations belong to class[i]
+ true_values <- ifelse(ValidSet[,"salt_2"]==classes[i],1,0)
+ # Assess the performance of classifier for class[i]
+ pred <- prediction(prediction_for_roc_curve[,classes[i]],true_values)
+ perf <- performance(pred, "tpr", "fpr")
+ if (i==1)
+ {
+     plot(perf,col=pretty_colours[i]) 
+ }
+ else
+ {
+     plot(perf,col=pretty_colours[i],add=TRUE) 
+ }
+ # Calculate the AUC and print it to screen
+ auc.perf <- performance(pred, measure = "auc")
+ auc <- c(auc, unlist(auc.perf@y.values))
+}
+abline(coef = c(0, 1), lty = 2)
+#legend("bottomright", legend = paste0(capitalize(classes), "; AUC: ", round(auc, 2)), col = pretty_colours, lty = 1, bty = "n")
+dev.off()
+
+
+```
+
+### Multinomial logistic regression: AIC, leave-one-out approach
+Change to random_400 if we want to plot the graph with n = 400 unresponsive genes
+
+```{r, eval = TRUE}
+raw.AIC.df <- read.delim("results/S_cerevisiae/dataAIC_salt_random_0.tsv", stringsAsFactors = F)
+# Full model as annotation in the graph
+raw.AIC.full <- raw.AIC.df[raw.AIC.df$Property=="full", "AIC"]
+# Remove full model for clarity
+raw.AIC.df.tP = raw.AIC.df[raw.AIC.df$Property!="full",]
+# Order from max to min
+propOrder = as.character(raw.AIC.df.tP[order(raw.AIC.df.tP$AIC), "Property_Formatted"])
+raw.AIC.df.tP$Property_Formatted = factor(raw.AIC.df.tP$Property_Formatted, levels = propOrder)
+ggplot(raw.AIC.df.tP, aes(x = AIC, y = Property_Formatted)) + 
+        geom_point() + 
+        geom_vline(xintercept = raw.AIC.full, colour = "red4", linetype = "dashed") +
+        theme_bw(base_size = 9, base_family = "Arial") + 
+        theme(axis.text = element_text(colour = "black", size = 9)) + 
+        xlab("AIC (leave-one-out approach)") +
+        ylab("")
+ggsave("figures/pointOrdered_AIC_salt_random_0.pdf", width = 4.25, height = 2.25, device = cairo_pdf)
+```
+
+### Multinomial logistic regression: Coefficients, radial plot
+
+```{r}
+# Change to 400 if wanted
+colorsRadial <- c("#6CA699", "#D75565")
+multinom.toPlot <- read.delim("results/S_cerevisiae/multinomialTestSummary_scaled_salt_random_0.tab", stringsAsFactors = F, row.names = 1)
+multinom.toPlot.radar <- multinom.toPlot[c("upregulated", "downregulated"), -1]
+# Change order of GC and length features
+multinom.toPlot.radar<- multinom.toPlot.radar[, c(1:4, 7,5,6,8,11,9,10,12,13)]
+multinom.toPlot.radar = tibble::rownames_to_column(multinom.toPlot.radar, var = "stressGroup2")
+prop.x.axis <- prop.names.format[match(colnames(multinom.toPlot.radar)[2:ncol(multinom.toPlot.radar)], prop.names.format$Property), "Property_formatted"]
+prop.x.axis <- sub("Protein-Protein Interaction", "PPI", prop.x.axis)
+prop.x.axis <- sub("transcription factors", "TFs", prop.x.axis)
+
+ggRadar(data = multinom.toPlot.radar, aes(color = stressGroup2, fill = stressGroup2), rescale = F, size = 0) + 
+  theme_bw(base_size = 16, base_family = "Arial") + 
+  scale_x_discrete(labels  = prop.x.axis) + 
+  scale_colour_manual(values = colorsRadial) +
+  scale_fill_manual(values = colorsRadial) + 
+  theme(axis.text = element_blank(), 
+        axis.ticks = element_blank()) + 
+  theme(legend.position = "none", panel.border = element_blank(),panel.grid = element_line(color = "grey", size = 1.1)) + 
+ggsave("figures/radarPlot_multinomCoefficients_random_0_wo_labels.pdf", width = 5, height = 5, device = cairo_pdf)
+
+```
+
+
+## Figure S3
+### Heatmap of pairwise correlations
+
+```{r, eval = TRUE}
+load("data/rdata/pairwise_pearson_allFeatures.rda")
+M <- cor_all$r
+row.names(M) <- prop.names.format[match(row.names(M), prop.names.format$Property), "Property_formatted_short"]
+colnames(M) <- prop.names.format[match(colnames(M), prop.names.format$Property), "Property_formatted_short"]
+p_mat <- cor_all$P
+row.names(p_mat) <- prop.names.format[match(row.names(p_mat), prop.names.format$Property), "Property_formatted_short"]
+colnames(p_mat) <- prop.names.format[match(colnames(p_mat), prop.names.format$Property), "Property_formatted_short"]
+
+
+
+col2 <- colorRampPalette(c("#67001F", "#B2182B", "#D6604D", "#F4A582",
+                           "#FDDBC7", "#FFFFFF", "#D1E5F0", "#92C5DE",
+                           "#4393C3", "#2166AC", "#053061"))
+
+cairo_pdf("figures/properties_all_pairwise_pearson.pdf", width = 7, height = 7, family = "Arial", pointsize = 9)
+corrplot.mixed(M, tl.pos = "lt", order = "alphabet", number.cex = 0.70, cex.axis = 1, number.digits = 1, upper = "color", lower = "number",lower.col = "black", upper.col = rev(col2(200)), tl.col = "black")
+dev.off()
+```
+### Multinomial logistic regression: AIC of an univariable model
+
+```{r, eval = TRUE}
+univariate.aic <- read.delim("results/S_cerevisiae/dataAIC_univariate_salt_random_0.tsv", stringsAsFactors = F)
+# Order from max to min
+propOrder = as.character(univariate.aic[order(univariate.aic$AIC, decreasing = T), "Property_Formatted"])
+univariate.aic$Property_Formatted = factor(univariate.aic$Property_Formatted, levels = propOrder)
+ggplot(univariate.aic, aes(x = AIC, y = Property_Formatted)) + 
+      geom_point() + 
+      theme_bw(base_size = 9, base_family = "Arial") + 
+      theme(axis.text = element_text(colour = "black", size = 9)) + 
+      xlab("AIC (univariable model)") + 
+      ylab("")
+ggsave("figures/pointOrdered_AIC_univariate_salt_random_0.pdf", width = 3.9, height = 1.9, device = cairo_pdf)
+```
+### Multinomial logistic regression: AIC, leave-one-out approach (coexpression degree)
+
+```{r, eval = TRUE}
+raw.AIC.df <- read.delim("results/S_cerevisiae/dataAIC_salt_random_0_coexpsDegree.tsv", stringsAsFactors = F)
+raw.AIC.full <- raw.AIC.df[raw.AIC.df$Property=="full", "AIC"]
+# Remove full model for clarity
+raw.AIC.df.tP = raw.AIC.df[raw.AIC.df$Property!="full",]
+# Order from max to min
+propOrder = as.character(raw.AIC.df.tP[order(raw.AIC.df.tP$AIC), "Property_Formatted"])
+raw.AIC.df.tP$Property_Formatted = factor(raw.AIC.df.tP$Property_Formatted, levels = propOrder)
+ggplot(raw.AIC.df.tP, aes(x = AIC, y = Property_Formatted)) + 
+        geom_point() + 
+        geom_vline(xintercept = raw.AIC.full, colour = "red4", linetype = "dashed") +
+        theme_bw(base_size = 9, base_family = "Arial") + 
+        theme(axis.text = element_text(colour = "black", size = 9)) + 
+        xlab("AIC (leave-one-out approach)") + 
+        ylab("")
+ggsave("figures/pointOrdered_AIC_salt_random_0_coexpsDegree.pdf", width = 3.9, height = 1.9, device = cairo_pdf)
+```
+
+### Random forest: ROC curve
+
+```{r, eval = TRUE}
+load("data/rdata/roc_curve_randomForest_scerevisiae_random_0.rda", verbose = TRUE)
+# Specify the different classes 
+classes <- c("unresponsive", "downregulated", "upregulated")
+# Store auc
+auc <- c()
+cairo_pdf(paste0("figures/roc_randomForest_train_valid_salt_random_0.pdf"), width = 2.5, height = 2.5, family = "Arial")
+par(mar = c(2.1, 2.1, 1.1, 1.1), ps = 9, tcl = -0.1, mgp = c(1, 0.1, 0))
+# For each class
+for (i in 1:length(classes)){
+   # Define which observations belong to class[i]
+   true_values <- ifelse(ValidSet[,"salt_2"]==classes[i],1,0)
+   # Assess the performance of classifier for class[i]
+   pred <- prediction(prediction_for_roc_curve[,classes[i]],true_values)
+   perf <- performance(pred, "tpr", "fpr")
+   if (i==1)
+   {
+       plot(perf,col=pretty_colours[i]) 
+   }
+   else
+   {
+       plot(perf,col=pretty_colours[i],add=TRUE) 
+   }
+   # Calculate the AUC and print it to screen
+   auc.perf <- performance(pred, measure = "auc")
+   auc <- c(auc, unlist(auc.perf@y.values))
+}
+abline(coef = c(0, 1), lty = 2)
+#legend("bottomright", legend = paste0(capitalize(classes), "; AUC: ", round(auc, 2)), inset = 0.05, col = pretty_colours, lty = 1, cex = 1.2)
+dev.off()
+```
+
+
+### Random forest: Mean decrease in accuracy
+
+```{r, eval = TRUE}
+imp.df.m = read.delim("results/S_cerevisiae/modelImportance_randomForestsalt_random_0.tab", stringsAsFactors = F, row.names = 1)
+imp.df.m$Property_Formatted <- paste0(" ", prop.names.format[match(row.names(imp.df.m), prop.names.format$Property), "Property_formatted_short"], " ")
+# Order from max to min
+propOrder = as.character(imp.df.m[order(imp.df.m$MeanDecreaseAccuracy), "Property_Formatted"])
+imp.df.m$Property_Formatted = factor(imp.df.m$Property_Formatted, levels = propOrder)
+
+ggplot(imp.df.m, aes(x = MeanDecreaseAccuracy, y = Property_Formatted)) + 
+      geom_point() + 
+      theme_bw(base_size = 9, base_family = "Arial") + 
+      theme(axis.text = element_text(colour = "black", size = 9)) + 
+      xlab("Mean decrease in accuracy") + 
+      ylab("")
+
+ggsave("figures/pointOrdered_Mean_Decrease_Accuracy_salt_random_0.pdf", width = 4.0, height = 2, device = cairo_pdf)
+```
+
+## Figure 4
+### Hog1 dependency boxplot
+
+```{r, eval=TRUE}
+mutantResPlot = read.table("results/S_cerevisiae/hog1_dependency/hog1Dependency_boxplot_data.tsv", 
+            stringsAsFactors = FALSE, 
+            sep = "\t", 
+            check.names = FALSE,
+            header =TRUE)
+
+
+# Change name of stress responsive annotation
+mutantResPlot$stressGene <- ifelse(mutantResPlot$stressGene == "Upregulated", 
+                                  yes = "Upregulated WT\n(log2FC >= 1)", 
+                                  no = "Downregulated WT\n(log2FC <= -1)")
+
+# Annotation for sign genes and log2fc <= -1
+down <- as.integer(table(mutantResPlot$mutantDep)["Less upregulated"])
+totalInd <- as.numeric(table(mutantResPlot$stressGene)[2]) 
+downPerc <- round(as.integer(table(mutantResPlot$mutantDep)["Less upregulated"])/as.numeric(table(mutantResPlot$stressGene)[2]) * 100,2)
+downAnn <- paste0("Less upregulated:\n", down, " of ", totalInd," (", downPerc, "%)")
+
+
+# Annotation for sign genes and log2fc >= 1
+up <- as.integer(table(mutantResPlot$mutantDep)["Less downregulated"])
+totalRep <- as.numeric(table(mutantResPlot$stressGene)[1]) 
+upPerc <- round(as.integer(table(mutantResPlot$mutantDep)["Less downregulated"])/as.numeric(table(mutantResPlot$stressGene)[1]) * 100,2)
+upAnn <- paste0("Less downregulated:\n", up, " of ", totalRep," (", upPerc, "%)")
+
+ggplot(data = mutantResPlot, aes(x = stressGene, y = lfc_interaction)) +
+ geom_quasirandom(aes(colour = mutantDep), alpha = 0.5) + 
+ geom_boxplot(alpha = 0.5, colour = "#636363", outlier.shape = NA, width = 0.1) + 
+ theme_classic(base_size = 9) + 
+ theme(axis.text = element_text(colour = "black", size = 9), 
+       axis.title = element_text(size = 9), 
+       legend.position = "none") + 
+ scale_color_manual(values = c("grey", "#3B9AB2", "#E1AF00")) + 
+annotate(geom = "text", 
+         label = upAnn,
+         family= theme_get()$text[["family"]], 
+        size= 9*0.35,
+         x = 1, y = min(mutantResPlot$lfc_interaction) + 10, hjust = .5) +
+annotate(geom = "text", 
+       label = downAnn,
+       family= theme_get()$text[["family"]], 
+       size= 9*0.35,
+       x = 2.0, y = max(mutantResPlot$lfc_interaction) - 0.5, hjust = .3) +
+ geom_hline(yintercept = 0, colour = "black", linetype = "dashed") + 
+ ylab(expression(paste(log[2]("Stress / Basal"), " HOG1 KO vs WT"))) + 
+ xlab("")
+ggsave(paste0("figures/boxplot_Hog1DependentGenes.pdf"), height = 2.5, width = 4)
+```
+
+### Logistic regression: AIC, leave-one-out approach
+
+```{r, eval = TRUE}
+raw.AIC.df <- read.delim("results/S_cerevisiae/dataAIC_upregulated_hog1DepSaltExt.tsv", stringsAsFactors = F)
+# Store full model for annotation
+raw.AIC.full <- raw.AIC.df[raw.AIC.df$Property == "full", "AIC"]
+# Remove full model
+raw.AIC.df.tP = raw.AIC.df[raw.AIC.df$Property!="full",]
+# Order from max to min
+propOrder = as.character(raw.AIC.df.tP[order(raw.AIC.df.tP$AIC), "Property_Formatted"])
+raw.AIC.df.tP$Property_Formatted = factor(raw.AIC.df.tP$Property_Formatted, levels = propOrder)
+ggplot(raw.AIC.df.tP, aes(x = AIC, y = Property_Formatted)) + 
+  geom_point() + 
+  geom_vline(xintercept = raw.AIC.full, colour = "red4", linetype = "dashed") +
+  theme_bw(base_size = 9, base_family = "Arial") + 
+  theme(axis.text = element_text(colour = "black", size = 9)) + 
+  xlab("AIC (leave-one-out approach)") + 
+  ylab("")
+ggsave("figures/pointOrdered_AIC_upregulated_hog1DepSaltExt.pdf", width = 4.25, height = 2.25, device = cairo_pdf)
+```
+
+### Logistic regression: Coefficients, volcano plot
+
+```{r, eval = TRUE}
+scaled.toPlot <- read.delim("results/S_cerevisiae/logisticTestSummary_scaled_upregulated_hog1DepSaltExt.tab", stringsAsFactors = F, row.names = 1)
+scaled.toPlot <- scaled.toPlot[row.names(scaled.toPlot) != "(Intercept)",]
+scaled.toPlot <- tibble::rownames_to_column(scaled.toPlot, var = "property")
+colnames(scaled.toPlot)[5] <- "pvalue"
+scaled.toPlot <- scaled.toPlot %>%
+  mutate(signif = ifelse(pvalue <= 0.05, yes = "Significant", no = "Non_significant"))
+
+scaled.toPlot$Property_formatted <- prop.names.format[match(scaled.toPlot$property, prop.names.format$Property), "Property_formatted"]
+scaled.toPlot$Molecule_of_property <- prop.names.format[match(scaled.toPlot$property, prop.names.format$Property), "Molecule"]
+scaled.toPlot$Molecule_of_property <- factor(scaled.toPlot$Molecule_of_property, levels = c("DNA", "RNA", "Protein"))
+
+ggplot(data = scaled.toPlot, aes(x = Estimate, y = -log10(pvalue))) + 
+  geom_point(aes(fill = Molecule_of_property), shape = 21, size = 2) +
+  geom_hline(colour = "grey", linetype = "dashed", yintercept = -log10(0.05)) + 
+  geom_vline(colour = "grey", linetype = "dashed", xintercept = 0) + 
+  theme_bw(base_family = "Arial", base_size = 9) + 
+  theme(legend.position = "bottom", 
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9, color = "black"),
+        axis.title = element_text(size = 9, color = "black"), 
+        axis.text = element_text(size = 9, color = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        panel.border = element_rect(colour = "black")) + 
+  geom_text_repel(data = subset(scaled.toPlot, signif == "Significant"),
+                  aes(label = Property_formatted),
+                  size = 9*0.35, 
+                  box.padding = unit(1.5, "lines"),
+                  point.padding = unit(0.3, "lines"),
+                  segment.colour = "grey36", 
+                  segment.alpha = 0.5, 
+                  colour = "black",
+                  force = 100) +
+  scale_fill_manual(values = c("dodgerblue4", "deepskyblue", "#B40F20")) + 
+  ylab(expression(-log[10]("p-value"))) + 
+  scale_y_continuous(trans = "log1p") + 
+  xlab("Importance (Logistic regression coefficient)") + 
+ggsave("figures/logisticTestVolcanoPlot_upregulated_hog1DepSaltExt_scaled.pdf", 
+       device = cairo_pdf, 
+       width = 2.75, 
+       height = 2.75)
+```
+
+## Figure S4
+
+### Hog1 experiment PCA
+
+```{r, eval = TRUE}
+# Reading data
+scores = read.delim("results/S_cerevisiae/hog1_dependency/hog1Dependency_pcagg_data.tsv",
+                    stringsAsFactors = F, 
+                    row.names = 1)
+# Fixing labels
+scores$group = gsub("basal", "Basal", scores$group)
+scores$group = gsub("salt", "Stress", scores$group)
+scores$group = gsub("WT", " Wild-type", scores$group)
+scores$group = gsub("HOG1_KO", " *HOG1* KO", scores$group)
+scores$group = factor(scores$group, levels = c("Basal: Wild-type", "Basal: *HOG1* KO", "Stress: Wild-type", "Stress: *HOG1* KO"))
+
+# x and y are 1st and 2nd component label is the sample name and colored by group
+ggPca <- ggplot(data = scores, aes(x = PC1, y = PC2, colour = group)) +
+theme_classic(base_size = 9, base_family = "Arial") + 
+geom_hline(yintercept = 0, colour = "gray65") +
+geom_vline(xintercept = 0, colour = "gray65") +
+geom_point(size = 2) + 
+# Scaling axes to take into account the min and max values of PC
+scale_x_continuous(limits = c(min(scores$PC1 - 2), max(scores$PC1 + 2))) + 
+scale_y_continuous(limits = c(min(scores$PC2 - 2), max(scores$PC2 + 2))) + 
+scale_color_npg() + 
+# Eliminating legend and setting up appearence of x and y axis
+theme(legend.position = "none", 
+    legend.title = element_blank(),
+    axis.text = element_text(size = 9, colour = "black"),
+    axis.line.x = element_line(colour = "black"),
+    axis.line.y = element_line(colour = "black"),
+    axis.title = element_text(size = 9, colour = "black"))
+# Putting PC1Var and PC2Var manually. This is computed in Hog1Dep genes analysis. 
+PC1Var = 85
+PC2Var = 12
+ggPca <- ggPca + xlab(paste0("PC1: ", PC1Var, "% variance")) + ylab(paste0("PC2: ", PC2Var, "% variance"))
+ggsave(ggPca, filename = "figures/pca_Hog1WT_Hog1KO_basal_salt_pcagg.pdf", width = 3.5, height = 2.5, device = cairo_pdf)  
+```
+
+
+### Hog1 basal volcano plot
+
+```{r, eval=TRUE}
+resBasal = read.delim("results/S_cerevisiae/hog1_dependency/results_basal_HOG1WT_vs_HOG1KO.tab", stringsAsFactors = F, sep = "\t")
+
+# Add -log10 padj
+resBasal$lpadj = -log10(resBasal$padj)
+
+# Remove rows that have NA values
+resBasal <- na.omit(resBasal)
+
+# Modify dataset to add new column with significant genes
+resBasal <- resBasal %>%
+  mutate(threshold = ifelse(abs(resBasal$log2FoldChange) >= 1 & resBasal$padj <= 0.05, yes = "Significantly changed", no = "Non significantly changed"))
+
+# Annotation for sign genes and log2fc <= -1 
+#down <- sum(resBasal$padj <= 0.05 & resBasal$log2FoldChange <= -1, na.rm = TRUE)
+#downAnn <- paste(paste("Downregulated:\n", down), "genes")
+
+# Annotation for sign genes and log2fc >= 1
+#up <- sum(resBasal$padj <= 0.05 & resBasal$log2FoldChange >= 1, na.rm = TRUE)
+#upAnn <- paste(paste("Upregulated:\n", up), "gene")
+
+genesInterest <- c("HOG1", "CWP1", "SED1", "PGU1") 
+
+p <- ggplot(resBasal, aes(x = log2FoldChange, y = lpadj)) +
+  geom_point(aes(color = factor(threshold)), size = 1.75, alpha = 0.8, na.rm = T) +
+  theme_bw(base_size = 9, base_family = "Arial") +
+  theme(legend.position = "none") + 
+  theme(legend.title = element_blank()) +
+  theme(axis.title=element_text(size=9),
+        axis.text = element_text(colour = "black", size = 9)) +
+  xlab(expression(paste(log[2], "(", italic("HOG1"), "KO / ", italic("HOG1"), "WT)"))) +
+  xlim(c(min(resBasal$log2FoldChange), 3)) +
+  ylab(expression(-log[10]("adjusted p-value"))) +
+  geom_vline(xintercept = 1, colour = "grey42", linetype = "dashed") + 
+  geom_vline(xintercept = -1, colour = "grey42", linetype = "dashed") + 
+  geom_hline(yintercept = 1.3, colour = "grey42", linetype = "dotdash") + 
+  #annotate(geom = "text", 
+   #        label = downAnn,
+    #       family = theme_get()$text[["family"]],
+     #      x = -5, y = min(resBasal$lpadj) + 0.5, hjust = .5, 
+      #     size = 9*0.35) +
+  #annotate(geom = "text", 
+   #        label = upAnn,
+    #       family = theme_get()$text[["family"]],
+     #      x = 3/1.7, y = min(resBasal$lpadj) + 0.5, hjust = .3, 
+      #     size = 9*0.35) +
+  geom_text_repel(
+      data = subset(resBasal, comName %in% genesInterest),
+      aes(label = comName),
+      size = 9*0.35,
+      fontface = 'italic',
+      box.padding = unit(0.35, "lines"),
+      point.padding = unit(0.3, "lines")) + 
+  scale_color_manual(values = c("Significantly changed" = "#E64B35",
+                     "Non significantly changed" = "#636363"))
+
+# Plot and scale y-axis with log1p function for visualize better taking into account high values
+p + scale_y_continuous(trans = "log1p")
+
+ggsave("figures/volcanoPlot_Basal_HOG1WT_vs_HOG1KO.pdf", width = 2.5, height = 2.5, device = cairo_pdf)
+```
+
+### Logistic regression: AIC of univariable model
+
+```{r, eval = TRUE}
+univariate.aic <- read.delim("results/S_cerevisiae/dataAIC_univariate_upregulated_hog1DepSaltExt.tsv", stringsAsFactors = F)
+# Order from max to min
+propOrder = as.character(univariate.aic[order(univariate.aic$AIC, decreasing = T), "Property_Formatted"])
+univariate.aic$Property_Formatted = factor(univariate.aic$Property_Formatted, levels = propOrder)
+ggplot(univariate.aic, aes(x = AIC, y = Property_Formatted)) + 
+    geom_point() + 
+    theme_bw(base_size = 9, base_family = "Arial") + 
+    theme(axis.text = element_text(colour = "black", size = 9)) + 
+    xlab("AIC (univariable model)") + 
+    ylab("")
+ggsave("figures/pointOrdered_AIC_univariate_upregulated_hog1DepSaltExt.pdf", width = 3.75, height = 2, device = cairo_pdf)
+```
+
+
+
+### Random forest: Hog1 dependent vs independent mean decrease in accuracy
+
+```{r, eval = TRUE}
+imp.df <- read.delim(file = "results/S_cerevisiae/modelImportance_randomForest_hog1DepSaltExt_upregulated.tab", stringsAsFactors = F, row.names = 1)
+imp.df.m$Property_Formatted <- paste0(" ", prop.names.format[match(row.names(imp.df.m), prop.names.format$Property), "Property_formatted_short"], " ")
+# Order from max to min
+propOrder = as.character(imp.df.m[order(imp.df.m$MeanDecreaseAccuracy), "Property_Formatted"])
+imp.df.m$Property_Formatted = factor(imp.df.m$Property_Formatted, levels = propOrder)
+ggplot(imp.df.m, aes(x = MeanDecreaseAccuracy, y = Property_Formatted)) + 
+  geom_point() + 
+  theme_bw(base_size = 9, base_family = "Arial") + 
+  theme(axis.text = element_text(colour = "black", size = 9)) + 
+  xlab("Mean Decrease in Accuracy") + 
+  ylab("")
+  ggsave("figures/pointOrdered_Mean_Decrease_Accuracy_Hog1DepSaltExt_upregulated.pdf", width = 3.75, height = 2, device = cairo_pdf)
+
+```
+
+## Figure 5
+### Heatmap of features
+
+Individual heatmaps for HeLa and selected yeast features
+
+```{r}
+# Read data
+stress.properties.df.human <- read.delim("results/human/humanStressConsensus_Properties_Full_Table.tsv", stringsAsFactors = F)
+stress.properties.df.yeast <- read.delim("results/S_cerevisiae/stressConsensus_Properties_Full_Table.tsv", stringsAsFactors = F)
+# Change name to salt column to differentiate from heatmap with all feature
+colnames(stress.properties.df.yeast)[3] <- "salt_yeast_selected"
+
+conditions <- c("salt_HeLa:unresponsive,upregulated,downregulated",
+                "salt:unresponsive,upregulated,downregulated")
+
+properties.toPlot <- c("Broad_conservation", "cpb", "Disorder", "DM", "gc_UTR5", "gc_CDS","gc_UTR3", 
+                       "halfLife", "length_UTR5", "length_CDS", "length_UTR3", "nTf", "PPI_degree")
+
+comparisonsHeatmapAnnotated(propertiesStressData = stress.properties.df.human, 
+                                properties = properties.toPlot, 
+                                columnDep = "salt_HeLa", 
+                                random = 0, 
+                                sourceMolTable = prop.names.format, 
+                                outWidth = 4.5, 
+                                outHeight = 2.5, 
+                                outTable = "results/human/medianValues_features_human_stressGroups.tab")
+  
+comparisonsHeatmapAnnotated(propertiesStressData = stress.properties.df.yeast, 
+                                properties = properties.toPlot, 
+                                columnDep = "salt_yeast_selected", 
+                                random = 0, 
+                                outWidth = 4.5,
+                                outHeight = 2.5,
+                                outTable = "results/human/medianValues_features_yeast_stressGroups.tab",
+                                sourceMolTable = prop.names.format)
+  
+```
+
+
+### Ridges plot of selected features
+
+```{r, eval = TRUE}
+# Filter unnecesary columns
+stress.properties.df.f = stress.properties.df.human %>% 
+  dplyr::select(c(salt_HeLa, gc_CDS, halfLife))
+
+stress.properties.df.f$salt_HeLa = Hmisc::capitalize(stress.properties.df.f$salt_HeLa)
+stress.properties.melt = melt(stress.properties.df.f)
+stress.properties.melt$feature = prop.names.format[match(stress.properties.melt$variable, prop.names.format$Property), "Property_formatted"]
+stress.properties.melt$salt_HeLa = factor(stress.properties.melt$salt_HeLa, levels = c("Upregulated", "Downregulated", "Unresponsive"))
+
+# Remove NAs to avoid displaying NA as a group
+stress.properties.melt <- na.omit(stress.properties.melt)
+
+ggplot(stress.properties.melt, aes(x = value, y = salt_HeLa, fill = salt_HeLa), color = salt_HeLa) + 
+  geom_density_ridges(alpha = 0.8) + 
+  facet_wrap(~feature, nrow = 2, scales = "free") + 
+  theme_bw(base_family = "Arial", base_size = 9) + theme(strip.text = element_text(face = "bold", size = 9),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          panel.border = element_rect(colour = "black"),
+          legend.position = "none", 
+          axis.title=element_text(size=9),
+          axis.text = element_text(colour = "black", size = 9),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 9),
+          panel.spacing = unit(16, "pt")) + 
+  scale_fill_manual(values = rev(c("gray", "#6CA699", "#D75565"))) + 
+  xlab("") + 
+  ylab("")
+ggsave("figures/ridgesPlot_selectedProperties_salt_HeLa.pdf", width = 1.75, height =3, device = cairo_pdf)
+
+
+```
+
+### Multinomial logistic regression: ROC curve
+
+```{r}
+load("data/rdata/roc_curve_multinomial_human_random_0.rda", verbose = TRUE)
+# Specify the different classes 
+classes <- c("unresponsive", "downregulated", "upregulated")
+pretty_colours <- c("gray", "#6CA699", "#D75565")
+# Store auc
+auc <- c()
+cairo_pdf(paste0("figures/roc_multinomialLogistic_train_valid_salt_HeLa_random_0.pdf"), width = 2.5, height = 2.5, family = "Arial")
+par(mar = c(2.1, 2.1, 1.1, 1.1), ps = 9, tcl = -0.1, mgp = c(1, 0.1, 0))
+for (i in 1:length(classes))
+{
+  # Define which observations belong to class[i]
+  true_values <- ifelse(ValidSet[,"salt_HeLa_2"]==classes[i],1,0)
+  # Assess the performance of classifier for class[i]
+  pred <- prediction(prediction_for_roc_curve[,i],true_values)
+  perf <- performance(pred, "tpr", "fpr")
+  if (i==1)
+  {
+    plot(perf,col=pretty_colours[i]) 
+  }
+  else
+  {
+    plot(perf,col=pretty_colours[i],add=TRUE) 
+  }
+  # Calculate the AUC and print it to screen
+  auc.perf <- performance(pred, measure = "auc")
+  auc <- c(auc, unlist(auc.perf@y.values))
+}
+
+
+abline(coef = c(0, 1), lty = 2)
+#legend("bottomright", legend = paste0(c("Unresponsive HeLa", "Downregulated HeLa", "Upregulated HeLa"), "; AUC: ", round(auc, 2)), inset = 0.05, col = pretty_colours, lty = c(1,1,1,4,4,4), cex = 1.2)
+dev.off()
+```
+
+
+### Multinomial logistic regression: AIC, leave-one-out approach
+```{r, eval = TRUE}
+raw.AIC.df <- read.delim("results/human/dataAIC_salt_HeLa_random_0.tsv", stringsAsFactors = F)
+# Full model as annotation in the graph
+raw.AIC.full <- raw.AIC.df[raw.AIC.df$Property=="full", "AIC"]
+# Remove full model for clarity
+raw.AIC.df.tP = raw.AIC.df[raw.AIC.df$Property!="full",]
+# Order from max to min
+propOrder = as.character(raw.AIC.df.tP[order(raw.AIC.df.tP$AIC), "Property_Formatted"])
+raw.AIC.df.tP$Property_Formatted = factor(raw.AIC.df.tP$Property_Formatted, levels = propOrder)
+ggplot(raw.AIC.df.tP, aes(x = AIC, y = Property_Formatted)) + 
+        geom_point() + 
+        geom_vline(xintercept = raw.AIC.full, colour = "red4", linetype = "dashed") +
+        theme_bw(base_size = 9, base_family = "Arial") + 
+        theme(axis.text = element_text(colour = "black", size = 9)) + 
+        xlab("AIC (leave-one-out approach)") + 
+        ylab("")
+ggsave("figures/pointOrdered_AIC_salt_HeLa_random_0.pdf", width = 4.25, height = 2.25, device = cairo_pdf)
+```
+
+
+
+### Multinomial logistic regression: Coefficients, radial plot
+
+
+```{r}
+# Change to 400 if wanted
+multinom.toPlot <- read.delim("results/human/multinomialTestSummary_scaled_Properties_salt_HeLa_random_0.tab", stringsAsFactors = F, row.names = 1)
+multinom.toPlot.radar <- multinom.toPlot[c("upregulated", "downregulated"), -1]
+multinom.toPlot.radar = tibble::rownames_to_column(multinom.toPlot.radar, var = "stressGroup2")
+prop.x.axis <- prop.names.format[match(colnames(multinom.toPlot.radar)[2:ncol(multinom.toPlot.radar)], prop.names.format$Property), "Property_formatted"]
+prop.x.axis <- sub("Protein-Protein Interaction", "PPI", prop.x.axis)
+prop.x.axis <- sub("transcription factors", "TFs", prop.x.axis)
+
+ggRadar(data = multinom.toPlot.radar, aes(color = stressGroup2, fill = stressGroup2), rescale = F, size = 0) + 
+  theme_bw(base_size = 16, base_family = "Arial") + 
+  scale_x_discrete(labels  = prop.x.axis) + 
+  scale_colour_manual(values = colorsRadial) +
+  scale_fill_manual(values = colorsRadial) +
+  theme(legend.title = element_blank(), 
+        legend.position = "none", panel.border = element_blank(), panel.grid = element_line(color = "grey", size = 1.1),
+        axis.text = element_blank(),
+        axis.ticks = element_blank()) + 
+ggsave("figures/radarPlot_multinomCoefficients_salt_HeLa_random_0_wo_labels.pdf", width = 5, height = 5, device = cairo_pdf)
+```
+
+## Figure S5
+### Ridges plot of rest features
+
+```{r, eval = TRUE}
+# Read data
+stress.properties.df <- read.delim("results/human/humanStressConsensus_Properties_Full_Table.tsv", stringsAsFactors = F)
+# Filter unnecesary columns (i.e retain only salt HeLa) and already plotted features
+stress.properties.df.f = stress.properties.df %>% 
+  dplyr::select(c(3:ncol(stress.properties.df), -gc_CDS, -halfLife))
+
+
+stress.properties.df.f$salt_HeLa = Hmisc::capitalize(stress.properties.df.f$salt_HeLa)
+stress.properties.melt = melt(stress.properties.df.f)
+# Remove rows with NA to avoid plotting problems
+stress.properties.melt = na.omit(stress.properties.melt)
+stress.properties.melt$feature = prop.names.format[match(stress.properties.melt$variable, prop.names.format$Property), "Property_formatted_short"]
+stress.properties.melt$salt_HeLa = factor(stress.properties.melt$salt_HeLa, levels = c("Upregulated", "Downregulated", "Unresponsive"))
+
+ggplot(stress.properties.melt, aes(x = value, y = salt_HeLa, fill = salt_HeLa)) + 
+  geom_density_ridges(alpha = 0.8) + 
+  facet_wrap(~feature, ncol = 3, scales = "free") + 
+  theme_bw(base_family = "Arial", base_size = 9) + theme(strip.text = element_text(face = "bold", size = 9),
+                                          axis.text = element_text(colour = "black", size = 9),
+                                          axis.title = element_text(size = 9), 
+                                          panel.grid.major = element_blank(),
+                                          panel.grid.minor = element_blank(),
+                                          strip.background = element_blank(),
+                                          plot.title = element_text(hjust = 0.5, face = "bold", size = 9),
+                                          panel.border = element_rect(colour = "black"),
+                                          axis.text.y = element_blank(),
+                                          axis.ticks.y = element_blank(),
+                                          legend.position = "none",
+                                          panel.spacing = unit(16, "pt"),
+                                          plot.margin = unit(c(5.1, 6.5, 5.1, 5.1), units = "points")) +
+  scale_fill_manual(values = rev(c("gray", "#6CA699", "#D75565"))) + 
+  xlab("") + 
+  ylab("")
+ggsave("figures/ridgesPlot_RestProperties_salt_HeLa.pdf", width = 6.5, height = 6.1, device = cairo_pdf)
+```
+
+### Multinomial logistic regression: Univariable modelling
+
+```{r, eval = TRUE}
+univariate.aic <- read.delim("results/human/dataAIC_univariate_salt_HeLa_random_0.tsv", stringsAsFactors = F)
+# Order from max to min
+propOrder = as.character(univariate.aic[order(univariate.aic$AIC, decreasing = T), "Property_Formatted"])
+univariate.aic$Property_Formatted = factor(univariate.aic$Property_Formatted, levels = propOrder)
+ggplot(univariate.aic, aes(x = AIC, y = Property_Formatted)) + 
+      geom_point() + 
+      theme_bw(base_size = 9, base_family = "Arial") + 
+      theme(axis.text = element_text(colour = "black", size =9)) + 
+      xlab("AIC (univariable model)") + 
+      ylab("")
+ggsave("figures/pointOrdered_AIC_univariate_salt_HeLa_random_0.pdf", width = 3.75, height = 2.0, device = cairo_pdf)
+```
+
+### Random forest: ROC curve
+
+```{r}
+load("data/rdata/roc_curve_randomForest_human_random_0.rda", verbose = TRUE)
+# Specify the different classes 
+classes <- c("unresponsive", "downregulated", "upregulated")
+pretty_colours <- c("gray", "#6CA699", "#D75565")
+# Store auc
+auc <- c()
+cairo_pdf(paste0("figures/roc_randomForest_train_valid_salt_HeLa_random_0.pdf"), width = 3, height = 3, family = "Arial")
+par(mar = c(2.1, 2.1, 1.1, 1.1), ps = 9, tcl = -0.1, mgp = c(1, 0.1, 0))
+# For each class (HeLa)
+for (i in 1:length(classes))
+{
+  # Define which observations belong to class[i]
+  true_values <- ifelse(ValidSet[,"salt_HeLa_2"]==classes[i],1,0)
+  # Assess the performance of classifier for class[i]
+  pred <- prediction(prediction_for_roc_curve[,i],true_values)
+  perf <- performance(pred, "tpr", "fpr")
+  if (i==1)
+  {
+    plot(perf,col=pretty_colours[i]) 
+  }
+  else
+  {
+    plot(perf,col=pretty_colours[i],add=TRUE) 
+  }
+  # Calculate the AUC and print it to screen
+  auc.perf <- performance(pred, measure = "auc")
+  auc <- c(auc, unlist(auc.perf@y.values))
+}
+abline(coef = c(0, 1), lty = 2)
+#legend("bottomright", legend = paste0(c("Unresponsive HeLa", "Downregulated HeLa", "Upregulated HeLa"), "; AUC: ", round(auc, 2)), inset = 0.05, col = pretty_colours, lty = c(1,1,1,4,4,4), cex = 1.2)
+dev.off()
+```
+
+### Random forest: Mean decrease in accuracy
+
+```{r, eval = TRUE}
+imp.df.m = read.delim("results/human/modelImportance_randomForestsalt_HeLa_random_0.tab", stringsAsFactors = F, row.names = 1)
+imp.df.m$Property_Formatted <- paste0(" ", prop.names.format[match(row.names(imp.df.m), prop.names.format$Property), "Property_formatted_short"], " ")
+# Order from max to min
+propOrder = as.character(imp.df.m[order(imp.df.m$MeanDecreaseAccuracy), "Property_Formatted"])
+imp.df.m$Property_Formatted = factor(imp.df.m$Property_Formatted, levels = propOrder)
+
+ggplot(imp.df.m, aes(x = MeanDecreaseAccuracy, y = Property_Formatted)) + 
+      geom_point() + 
+      theme_bw(base_size = 9, base_family = "Arial") + 
+      theme(axis.text = element_text(colour = "black", size = 9)) + 
+      xlab("Mean Decrease in Accuracy") + 
+      ylab("")
+
+ggsave("figures/pointOrdered_Mean_Decrease_Accuracy_salt_HeLa_random_0.pdf", width = 3.75, height = 2.0, device = cairo_pdf)
+  
+```
+## Figure 6
+
+### Heatmap TCGA RNASeq: HeLa
+```{r}
+load("data/rdata/rnaseq_tcga_HeLa.Rda", verbose = TRUE)
+# Convert to matrix
+foldChangeSel = as.matrix(foldChangeSel)
+
+colSplit = factor(rowSplit, levels = c("Unresponsive", "Downregulated", "Upregulated"))
+
+# Heatmap colors (blue, white, red) from -4 to 4 in fold change (selected arbitrarely)
+col_fun = colorRamp2(c(-4, 0, 4), c("#5498AF", "#ffffff", "#E03722"))
+
+# Remove genes with NA since generate errors in hclust for heatmap
+foldChangeSel <- foldChangeSel[which(rowSums(is.na(foldChangeSel)) == 0),]
+colSplit <- colSplit[which(rowSums(is.na(foldChangeSel)) == 0)]
+
+tumorsAnalyzed <- colnames(foldChangeSel)
+cairo_pdf("figures/heatmap_TCGA_RNASeq_salt_HeLa.pdf", width = 6, height = 3.5, family = "Arial")
+Heatmap(t(foldChangeSel), show_column_names = FALSE, column_split = colSplit, cluster_columns = T, cluster_rows = F,
+        name = " ", col = col_fun, cluster_column_slices = F, 
+        column_title_gp = gpar(fontsize = 9), row_names_gp = gpar(fontsize = 9), 
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 9, fontface = "bold", labels_gp = gpar(fontsize = 9))))
+dev.off()
+
+```
+
+### Aggregate RNASeq data: Density Ridges plot HeLa
+
+```{r}
+load("data/rdata/rnaseq_tcga_HeLa.Rda", verbose = TRUE)
+# Remove genes with NA for conistency with heatmap
+foldChangeSel <- foldChangeSel[which(rowSums(is.na(foldChangeSel)) == 0),]
+rowSplit <- rowSplit[which(rowSums(is.na(foldChangeSel)) == 0)]
+# Distribution of proportions plot data
+foldChangeSel = as.data.frame(foldChangeSel)
+foldChangeSel$stressGene = rowSplit
+foldChangeSel.melt = melt(foldChangeSel)
+foldChangeSel.melt$stressGene = factor(foldChangeSel.melt$stressGene, levels = c("Unresponsive", "Downregulated", "Upregulated"))
+
+drRNAseq <- ggplot(foldChangeSel.melt, aes(x = value, y = stressGene, fill = stressGene), color = "black") + 
+  geom_density_ridges(alpha = 0.8) +
+  theme_bw(base_family = "Arial", base_size = 9) + theme(axis.text.x = element_text(colour = "black", size = 9), 
+                                          axis.text.y = element_text(colour = "black", size = 9), 
+                                          panel.grid.major = element_blank(),
+                                          panel.grid.minor = element_blank(),
+                                          strip.background = element_blank(),
+                                          panel.border = element_rect(colour = "black"),
+                                          legend.title = element_blank()) +
+  scale_fill_manual(values = c("gray", "#6CA699", "#D75565")) + 
+  xlab(expression(log[2]("Tumor"/ "Normal"))) + 
+  ylab("")
+
+ggsave("figures/densityRidges_Plot_tumoursCombined_RNASeq_salt_HeLa.pdf", width = 4.3, height = 2, device = cairo_pdf)
+```
+
+
+### Aggregate CNA data: Density Ridges plot HeLa
+
+```{r}
+load(file = "data/rdata/cna_tcga_HeLa.Rda", verbose = TRUE)
+# Distribution of proportions plot data
+cnPropSel = as.data.frame(cnPropSel)
+cnPropSel$stressGene = rowSplit
+cnPropSel.melt = melt(cnPropSel)
+cnPropSel.melt$stressGene = factor(cnPropSel.melt$stressGene, levels = c("Unresponsive", "Downregulated", "Upregulated"))
+
+drCNA <- ggplot(cnPropSel.melt, aes(x = value, y = stressGene, fill = stressGene), color = "black") + 
+  geom_density_ridges(alpha = 0.8) +
+  theme_bw(base_family = "Arial", base_size = 9) + theme(axis.text.x = element_text(colour = "black", size = 9), 
+                                          axis.text.y = element_text(colour = "black", size = 9), 
+                                          panel.grid.major = element_blank(),
+                                          panel.grid.minor = element_blank(),
+                                          strip.background = element_blank(),
+                                          panel.border = element_rect(colour = "black"),
+                                          legend.title = element_blank(),
+                                          legend.text = element_text(size = 9)) +
+  scale_fill_manual(values = c("gray", "#6CA699", "#D75565")) + 
+  xlab("CNA proportion") + 
+  ylab("")
+
+ggsave("figures/densityRidges_Plot_tumoursCombined_CNA_salt_HeLa.pdf", width = 4.3, height = 2, device = cairo_pdf)
+
+```
+
+
+## Figure S6
+### Heatmap TCGA CNA: HeLa
+
+
+```{r}
+load(file = "data/rdata/cna_tcga_HeLa.Rda", verbose = TRUE)
+colSplit = factor(rowSplit, levels = c("Unresponsive", "Downregulated", "Upregulated"))
+col_fun = colorRamp2(c(0, 0.5, 1), c("#e0ecf4", "#9ebcda", "#8856a7"))
+# Select only those samples analyzed in TCGA RNA-seq
+cnPropSel <- cnPropSel[, tumorsAnalyzed]
+cairo_pdf("figures/heatmap_CNA_genesInterest_salt_HeLa.pdf", width = 6, height = 3.5)
+Heatmap(t(cnPropSel), show_column_names = FALSE, column_split = colSplit, cluster_columns = T, cluster_rows = F, name = " ", col = col_fun, cluster_column_slices = F, column_title_gp = gpar(fontsize = 9), row_names_gp = gpar(fontsize = 9), 
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 9, fontface = "bold", labels_gp = gpar(fontsize = 9))))
+dev.off()
+```

@@ -1,0 +1,31 @@
+Property	Property_formatted	Property_formatted_short	Source	Molecule
+Broad_conservation	Broad conservation	Broad conservation	Koch et al., 2012	DNA
+Co.expression_degree	Co-expression degree	Co-expression degree	Koch et al., 2012	RNA
+CAI	Codon Adaptation Index	Codon Adaptation Index	In-house	DNA
+cpb	Codon Pair Bias	Codon Pair Bias	In-house	DNA
+Disorder	Disorder	Disorder	Koch et al., 2012	Protein
+DM	Distance-to-Median (mRNA variability)	Distance-to-Median	In-house	RNA
+dN.dS	dN/dS (Species complex conservation)	dN/dS	Koch et al., 2012	DNA
+Expression_level	Expression level	Expression level	Koch et al., 2012	RNA
+Expression_variation	Expression variation	Expression variation	Koch et al., 2012	RNA
+SM_fitness_defect	Fitness defect	Fitness defect	Koch et al., 2012	DNA
+gc_CDS	GC content CDS	GC content CDS	In-house	DNA
+gc_UTR3	GC content 3'UTR	GC content 3'UTR	In-house	DNA
+gc_UTR5	GC content 5'UTR	GC content 5'UTR	In-house	DNA
+Observed_GI_degree	Genetic interaction degree	Genetic interaction degree	Koch et al., 2012	DNA
+halfLife	Half-life	Half-life	Chan et al., 2018	RNA
+length_CDS	Length CDS	Length CDS	In-house	DNA
+length_UTR3	Length 3'UTR	Length 3'UTR	In-house	DNA
+length_UTR5	Length 5'UTR	Length 5'UTR	In-house	DNA
+Multifunctionality	Multifunctionality	Multifunctionality	Koch et al., 2012	Protein
+Nc	Nc (Effective number of codons)	Effective number of codons	Koch et al., 2012	DNA
+Num_of_domains	Number of domains	Number of domains	Koch et al., 2012	Protein
+nTf	Number of transcription factors	Number of transcription factors	YEASTRACT	RNA
+Num_of_unique_domains	Number of unique domains	Number of unique domains	Koch et al., 2012	Protein
+PARS_CDS	PARS CDS (RNA structure)	PARS CDS	Kertesz et al., 2010	RNA
+PARS_UTR3	PARS 3'UTR (RNA structure)	PARS 3'UTR	Kertesz et al., 2010	RNA
+PARS_UTR5	PARS 5'UTR (RNA structure)	PARS 5'UTR	Kertesz et al., 2010	RNA
+LLR	Prionic properties	Prionic properties	Alberti et al., 2009	Protein
+PPI_degree	Protein-Protein Interaction degree	PPI degree	Koch et al., 2012	Protein
+vst_residual_variance	VST residual variance (mRNA variability)	VST residual variance	In-house	RNA
+Yeast_conservation	Yeast conservation	Yeast conservation	Koch et al., 2012	DNA

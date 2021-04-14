@@ -1,0 +1,16 @@
+Property	AIC	Property_Formatted
+Broad_conservation	1958.55678287218	 Broad conservation 
+Co.expression_degree	2387.16269071348	 Co-expression degree 
+cpb	1943.74598151207	 Codon Pair Bias 
+Disorder	1894.05904005016	 Disorder 
+DM	1894.45953476529	 Distance-to-Median 
+gc_CDS	1897.73537613272	 GC content CDS 
+gc_UTR3	1891.9245263181	 GC content 3'UTR 
+gc_UTR5	1887.56556222094	 GC content 5'UTR 
+halfLife	1958.03304288646	 Half-life 
+length_CDS	1900.68029413237	 Length CDS 
+length_UTR3	1891.78394813752	 Length 3'UTR 
+length_UTR5	1897.34597466519	 Length 5'UTR 
+nTf	1935.31116492088	 Number of transcription factors 
+PPI_degree	1902.67244588053	 PPI degree 
+full	1891.50346223072	 Full Model 

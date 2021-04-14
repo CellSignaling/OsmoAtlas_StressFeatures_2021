@@ -1,0 +1,89 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+## Libraries and folders
+
+```{r}
+library(dplyr)
+
+dir.create("tables", showWarnings = FALSE)
+```
+
+## Table S1
+
+```{r}
+s1 <- read.delim("results/S_cerevisiae/DESeq2/S_cerevisiae_merged_salt_lfc1_p05_results.tsv", stringsAsFactors = FALSE)
+
+# Select columns and create stressType column
+s1 <- s1 %>% select(ensembl_gene_id, external_gene_name, log2FoldChange, lfcSE, padj) %>%
+  mutate(stressType = ifelse(test = log2FoldChange >= 1 & padj <= 0.05, 
+                             yes = "upregulated", no = ifelse(test = log2FoldChange <=- 1 & padj <= 0.05, 
+                                                              yes = "downregulated", no = "unresponsive")))
+
+write.table(x = s1, file = "tables/Supplementary_Table_1_OsmoAtlas.tab", quote = FALSE, sep = "\t", row.names = FALSE)
+```
+
+
+## Table S2
+
+```{r}
+s2 <- read.delim("results/S_cerevisiae/stressConsensus_Properties_Full_Table.tsv", stringsAsFactors = FALSE)
+
+colnames(s2)[3:4] <- c("stressType", "hog1Dependency")
+
+write.table(x = s2, file = "tables/Supplementary_Table_2_Yeast_StressFeatures.tab", row.names = FALSE, quote = FALSE, sep = "\t")
+```
+
+
+## Table S3
+
+```{r}
+s3 <- read.delim("results/S_cerevisiae/medianValues_features_stressGroups.tab", stringsAsFactors = FALSE)
+
+write.table(x = s3, file = "tables/Supplementary_Table_3_Yeast_MedianValues_Wilcoxon.tab", row.names = FALSE, quote = FALSE, sep = "\t")
+```
+
+## Table S4
+
+Table copied directly from HOMER results
+
+
+## Table S5
+
+```{r}
+s5 <- read.delim("data/original_data/Cate_DESeq2_salt_vs_nostress.tsv", stringsAsFactors = FALSE)
+
+colnames(s5)[1:2] <- c("ensembl_gene_id", "external_gene_name")
+# Select columns and create stressType column
+s5 <- s5 %>% select(ensembl_gene_id, external_gene_name, log2FoldChange, lfcSE, padj) %>%
+  mutate(stressType = ifelse(test = log2FoldChange >= 1 & padj <= 0.05, 
+                             yes = "upregulated", no = ifelse(test = log2FoldChange <=- 1 & padj <= 0.05, 
+                                                              yes = "downregulated", no = "unresponsive")))
+
+write.table(x = s5, file = "tables/Supplementary_Table_5_HeLa_osmostressResponsive.tab", quote = FALSE, sep = "\t", row.names = FALSE)
+```
+
+## Table S6
+
+```{r}
+s6 <- read.delim("results/human/humanStressConsensus_Properties_Full_Table.tsv", stringsAsFactors = FALSE)
+
+colnames(s6)[3] <- "stressType_HeLa"
+
+write.table(x = s6, file = "tables/Supplementary_Table_6_Human_StressFeatures.tab", row.names = FALSE, quote = FALSE, sep ="\t")
+```
+
+## Table S7
+
+```{r}
+s7 <- read.delim("results/human/medianValues_features_human_stressGroups.tab", stringsAsFactors = FALSE)
+write.table(x = s7, file = "tables/Supplementary_Table_7_Human_MedianValues_Wilcoxon.tab", row.names = FALSE, quote = FALSE, sep = "\t")
+
+```

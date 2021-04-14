@@ -1,0 +1,70 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+# Human stress genes features
+
+*Objective*: Investigate yeast stress features in humans.
+
+```{r}
+# Make folder for results
+dir.create("results/human", showWarnings = F)
+```
+
+## Gene gathering
+
+Experimentally defined osmostress-responsive genes with RNA-seq data in HeLa cells (100 mM NaCl, 3 hours)
+
+```{r}
+source("scr/human/genesGather.R")
+```
+
+
+## Properties gathering
+
+First gather human IDs (one ENSG one ENST relationship). Using APPRIS
+
+```{r}
+source("scr/human/humanIdsGather.R")
+```
+
+Second, gather human properties and create a table with the correct format
+
+```{r}
+source("scr/human/propertiesGather.R")
+```
+
+## Feature modelling
+
+
+```{r}
+source("scr/human/modellingProperties.R")
+```
+
+
+## TCGA analysis of stress genes
+
+```{r}
+dir.create("data/original_data/tcga.rna", showWarnings = FALSE)
+```
+
+```{bash}
+for i in ~/projects/public_data/2016_01_28_TCGA_RNAseq/*/*data.txt; do
+       cancerType=`basename "$i" | awk '{split($0,a,"."); print a[1]}'`;
+       mkdir -p data/original_data/tcga.rna/"$cancerType"
+	     ln -sf "$i" data/original_data/tcga.rna/"$cancerType"/
+	     ln -sf ~/projects/public_data/TCGA_2016_01_28/"$cancerType"/tumour/patient_annotation.txt \
+		       data/original_data/tcga.rna/"$cancerType"/ 
+done
+
+```
+
+```{r}
+source("scr/human/tcgaRNAseq.R")
+```
+
+```{r}
+source("scr/human/tcgaCN.R")
+```
+
+

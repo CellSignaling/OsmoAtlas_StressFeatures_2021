@@ -1,0 +1,855 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+
+# Stress-genes features
+
+
+*Objective*: With different sets of stress-responsive genes check their features and rank them by importance for predicting stress-responsive genes.
+
+## Quality control: Fold change comparison with previous data
+
+Execute the script that process raw data from published articles and put it in a folder ready for the comparing fold changes between experiments. Then prepare the data for plotting
+
+```{r, eval=TRUE}
+
+# Execute the script for processing stress responsive files from Gasch and tillings
+source("scr/previousResponsive.R")
+
+# Read the data
+
+tilings = read.delim("data/derived_data/0.4M_NaCl_FC_15min_responsive_Tilings.txt", stringsAsFactors = F)
+gasch = read.delim("data/derived_data/1M_Sorbitol_15min_FC_Gasch.txt", stringsAsFactors = F)
+RNAseq = read.delim("results/S_cerevisiae/DESeq2/S_cerevisiae_merged_salt_lfc1_p05_results.tsv", stringsAsFactors = F)
+
+# Tilings annotation has two ORFs sometimes, we keep the first.
+tilings$name2 = unlist(lapply(strsplit(tilings$name, ","), function(x) return(x[1])))
+# Remove duplicates
+tilings = tilings[!duplicated(tilings$name2),]
+
+# Common IDS between the three datasets
+commonIDS = Reduce(intersect, list(tilings$name2, gasch$UID, RNAseq$ensembl_gene_id))
+
+# Prepare for plotting
+tilingsC = subset(tilings, name2 %in% commonIDS)
+gaschC = subset(gasch, UID %in% commonIDS)
+RNAseqC = subset(RNAseq, ensembl_gene_id %in% commonIDS)
+
+tilingsC = tilingsC[order(tilingsC$name2),]
+gaschC = gaschC[order(gaschC$UID),]
+RNAseqC = RNAseqC[order(RNAseqC$ensembl_gene_id),]
+
+fcPrevPlot = data.frame(ensembl_gene_id = RNAseqC$ensembl_gene_id,
+           RNASeq = RNAseqC$log2FoldChange, 
+           Gasch = gaschC$X1M.sorbitol...15.min,
+           Tilings = tilingsC$wt.15..0.4M...wt.0, 
+           stringsAsFactors = F)
+
+write.table(x = fcPrevPlot, 
+            file = "results/S_cerevisiae/fcComparison_previousData.tab", 
+            sep = "\t", 
+            quote = F, 
+            row.names = F)
+```
+
+
+## Functional enrichment analysis
+
+```{r}
+dir.create("results/S_cerevisiae/EnrichmentMap", showWarnings = FALSE)
+# Processing the data for functional enrichment analysis with gprofiler and enrichmentmap in cytoscape
+up <- read.delim("results/S_cerevisiae/responsive_genes/responsive_genes_salt_lfc1_up_merged.tsv", stringsAsFactors = FALSE)
+write.table(x = paste(up$ensembl_gene_id, collapse = " "), file = "results/S_cerevisiae/EnrichmentMap/gProfiler_format_upregulated.txt", row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+down <- read.delim("results/S_cerevisiae/responsive_genes/responsive_genes_salt_lfc1_down_merged.tsv", stringsAsFactors = FALSE)
+write.table(x = paste(down$ensembl_gene_id, collapse = " "), file = "results/S_cerevisiae/EnrichmentMap/gProfiler_format_downregulated.txt", row.names = FALSE, col.names = FALSE, quote = FALSE)
+```
+
+
+## Annotations and FASTA sequences
+
+
+* Download UTRs annotation (Nagalakshmi et al., 2008) from SGD yeast browser.
+
+* Parse UTRs annotations to eliminate 5'UTR with the warning: Potential AUG annotation error. This UTRs conflict with CDS annotation and ended up located inside CDS.
+
+* Eliminate YLL054C 3'UTR that is annotated inside CDS.
+
+* Process annotations
+
+* Concatenate annotations
+
+* Sort them
+
+
+* Obtain FASTA sequences with getFASTA using genome FASTA sequence from [ENSEMBL](ftp://ftp.ensembl.org/pub/release-89/fasta/saccharomyces_cerevisiae/dna/Saccharomyces_cerevisiae.R64-1-1.dna.toplevel.fa.gz)
+
+* Parse in R to match the desired format and merge with [CDS sequences](ftp://ftp.ensembl.org/pub/release-89/fasta/saccharomyces_cerevisiae/cds/Saccharomyces_cerevisiae.R64-1-1.cds.all.fa.gz)
+
+
+```{r, eval=TRUE}
+# Execute the script that perform all the proposed steps
+system2(command = "chmod", args = "a+x scr/main_annotation_processing.sh")
+system2("./scr/main_annotation_processing.sh")
+```
+
+
+## Collect sequence data
+
+In the form of 5'utr, cds, 3'utr
+
+```{r, eval = TRUE}
+library(biomartr)
+
+# Read CDS downloaded from Ensembl ftp (cds release-92)
+sc_CDS <- read_cds(file= "data/original_data/Saccharomyces_cerevisiae.R64-1-1_release-89.cds.all.fa.gz", 
+                   obj.type = "Biostrings")
+
+# Create a data frame from CDS sequences
+genesCDS = data.frame(geneName = unlist(lapply(strsplit(names(sc_CDS), " "), function(x) return(x[1]))), 
+                      CDS = sc_CDS, 
+                      row.names = NULL, 
+                      stringsAsFactors = F)
+
+# Read UTRs from Nagalaskshmi et al., 2008
+genesUTRs = read.delim("data/derived_data/Saccharomyces_cerevisiae.R64-1-1.89_w_UTRs_sequences.tab", 
+                     stringsAsFactors = F, 
+                     header = FALSE, 
+                     col.names = c("geneFeature", "sequence"))
+
+# Separate into 5'utr and 3'utr and in the desired format
+genesUTRs$which_utr = unlist(lapply(strsplit(genesUTRs$geneFeature, ":"), function(x) return(x[1])))
+genesUTRs$geneName = unlist(lapply(strsplit(genesUTRs$geneFeature, ":"), function(x) return(x[2])))
+genes5UTR = subset(genesUTRs, which_utr == "5UTR", c(geneName, sequence))
+colnames(genes5UTR) = c("geneName", "UTR5")
+genes3UTR = subset(genesUTRs, which_utr == "3UTR", c(geneName, sequence))
+colnames(genes3UTR) = c("geneName", "UTR3")
+
+# Merge data frames
+geneswUtrs = Reduce(function(x,y) merge(x,y, by = "geneName", all = TRUE), list(genes5UTR, genesCDS, genes3UTR))
+# Remove gene that only has 3UTR due to annotation error
+geneswUtrs = geneswUtrs[geneswUtrs$geneName != "YDL038C",]
+# Genename column as row.names
+row.names(geneswUtrs) = geneswUtrs$geneName
+geneswUtrs = geneswUtrs[,-1]
+```
+
+## Length
+
+```{r, eval=TRUE}
+# lapply gives the result to a list
+# with do.call, as.data.frame and cbind
+# ordering as a data frame, specifying
+# row.names from geneswUTRs
+lengthGeneswUtrs <- as.data.frame(do.call(cbind, lapply(geneswUtrs, nchar)), 
+                   row.names = row.names(geneswUtrs))
+colnames(lengthGeneswUtrs) <- paste0("length_",colnames(lengthGeneswUtrs))
+```
+
+## GC content comparison
+
+```{r, eval=TRUE}
+library(stringr)
+gcGeneswUtrs <- as.data.frame(do.call(cbind, lapply(geneswUtrs, function(x) (str_count(x, "G") + str_count(x, "C"))/ nchar(x))), 
+                   row.names = row.names(geneswUtrs))
+colnames(gcGeneswUtrs) <- paste0("gc_",colnames(gcGeneswUtrs))
+```
+
+
+## Codon Pair Bias
+
+Computed based on: http://science.sciencemag.org/content/sci/suppl/2008/06/26/320.5884.1784.DC1/Coleman.SOM.pdf
+
+```{r, eval=TRUE}
+source("functions/CodonPairBias.R")
+cpbGeneswUtrs <- CodonPairBias(genetable = geneswUtrs)
+cpbGeneswUtrs <- data.frame(cpbGeneswUtrs, row.names = 1, stringsAsFactors = F)
+```
+
+
+## Structure: PARS score
+
+PARS score object generated by René from [PARS publication data](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3847670/). Here we just consider the mean PARS score per gene.
+
+```{r, eval = TRUE}
+load("data/original_data/PARS_objects_Pablo.RData", verbose = T)
+# PARS summary table use at it is
+parsGeneswUtrs <- as.data.frame(parsSummaryTable[,c("PARS_UTR5", "PARS_CDS", "PARS_UTR3")])
+```
+
+
+## Prionic properties
+Prion Like Amino Acid Composition as precomputed in the [PLAAC page](http://plaac.wi.mit.edu/Scer-all-proteins-2014-05-17.xls).
+
+```{r, eval = TRUE}
+plaac <- read.delim("data/original_data/plaac_yeast.txt", stringsAsFactors = F)
+plaacGeneswUtrs <- data.frame(plaac[,c("SEQid", "LLR")], row.names = 1, stringsAsFactors = F)
+```
+
+## Gene expression variability computed from scRNA-seq
+DM and residual variance computed from single cell data
+```{r, eval = TRUE, warning=FALSE}
+
+source("scr/yscGeneExsVar.R")
+
+noise <- read.delim("results/S_cerevisiae/expsVariability_DM_resVar.tab", stringsAsFactors = F)
+# First element of composed ORFs as name of the ORF
+noise$name.first <- unlist(lapply(strsplit(noise$name, ","), function(x) return(x[1])))
+# Deal with duplicated gene names (n = 8) that appear after removing first element of composed ORFs
+dIds <- duplicated(noise$name.first)
+noise$name.first.wd <- noise$name.first 
+noise$name.first.wd[dIds] <- paste(noise$name.first.wd[dIds], "_2", sep = "")
+
+noiseGeneswUtrs <- data.frame(noise[,c("name.first.wd", "DM", "vst_residual_variance")], row.names = 1, stringsAsFactors = F)
+```
+
+## Number of TF regulating a gene
+Data downloaded from [YEASTRACT database]
+
+```{r, eval = TRUE}
+# Read data generated in http://kaph.inesc-id.pt/formgenerateregulationmatrix.php using Documented (DNA plus Expression), all ORFs, all TFs
+regulatoryAssociations <- read.delim("data/original_data/RegulationTwoColumnTable_Documented_20201021_749_464933261.tsv", stringsAsFactors = F, sep = ";")
+
+# Format data to have the gene and the transcription factors that regulate it
+tfByGene <- with(regulatoryAssociations, split(TF, Target))
+
+# Remove the only two genes that have a duplicated TF (MAL61 and MAL62)
+tfByGene <- tfByGene[lapply(lapply(tfByGene, duplicated), sum) == 0] 
+# Number of TF that regulates a gene
+nTfByGene <- lapply(tfByGene, length)
+
+# Generate a data frame
+nTfByGene.df <- plyr::ldply(nTfByGene)
+colnames(nTfByGene.df) <- c("gene", "nTf")
+nTfGeneswUtrs <- data.frame(nTfByGene.df, row.names = 1, stringsAsFactors = F)
+
+# nTFs is a mix of ensembl gene ids and gene external symbols
+library(biomaRt)
+sc <- useMart("ensembl", dataset = "scerevisiae_gene_ensembl", host = "http://may2017.archive.ensembl.org")
+ensembl <- getBM(filters = "external_gene_name", 
+                 attributes = c("ensembl_gene_id", "external_gene_name"),
+                 values = row.names(nTfGeneswUtrs), 
+                 mart = sc)
+
+nTfGeneswUtrs$ensembl_gene_id <- ensembl[match(row.names(nTfGeneswUtrs), ensembl$external_gene_name),"ensembl_gene_id"]
+nTfGeneswUtrs$ensembl_gene_id <- ifelse(is.na(nTfGeneswUtrs$ensembl_gene_id), yes = row.names(nTfGeneswUtrs), no = nTfGeneswUtrs$ensembl_gene_id)
+nTfGeneswUtrs <- data.frame(nTfGeneswUtrs, row.names = 2, stringsAsFactors = F)
+```
+
+## Half-life
+
+Time of an RNA to reduce its number to half. From [eLIFE article](https://elifesciences.org/articles/32536): Non-invasive measurement of mRNA decay reveals translation initiation as the major determinant of mRNA stability.
+
+```{r, eval = TRUE}
+# Read data downloaded from eLife article (https://elifesciences.org/articles/32536)
+halfLife <- read.delim("data/original_data/elife-32536-fig1-data2-v4_halfLife_yeast_replicates.txt", stringsAsFactors = F)
+
+# Data is two replicates
+# Compute the mean, if only one value use this value
+halfLife$halfLife <- rowMeans(halfLife[,3:4], na.rm = T)
+# Substitue NaN by NA
+halfLife[is.nan(halfLife$halfLife), "halfLife"] <- NA
+
+# Now is normal, try to do the plot using both approaches and for the model maybe take the log2
+halfLifeGeneswUtrs <- data.frame(halfLife[,c("gene_id", "halfLife")], stringsAsFactors = F, row.names = 1)
+```
+
+## Extra features from Koch et al., 2012 Genome biology
+
+```{r, eval=TRUE}
+# Read data, then merge
+## Small warning: Only taking into account genes that are in both lists and could be merged
+## In addition, some external gene identifiers of the table are ensembl gene ids
+## Furthermore, there are official gene symbols that in the downloaded table are aliases or even OCT1 is transformed to 1-Oct due to excel
+kochSupTable <- read.delim("data/original_data/Koch_2012_Genome_Biology_AF3.txt", 
+                           stringsAsFactors = F)
+
+# Change NaN to NA (from stack exchange: https://stackoverflow.com/questions/18142117/how-to-replace-nan-value-with-zero-in-a-huge-data-frame)
+# Note that it is not required to call is.nan.data.frame due to method dispatch
+is.nan.data.frame <- function(x)
+do.call(cbind, lapply(x, is.nan))
+
+kochSupTable[is.nan(kochSupTable)] <- NA
+kochSupTable <- kochSupTable[!duplicated(kochSupTable$ensembl_gene_id),]
+
+# Warning: The subseting is done by indices so if changed do it carefully
+kochGeneswUtrs <- data.frame(kochSupTable[,2:19], stringsAsFactors = F, row.names = 1) 
+# Remove length protein and copy number
+kochGeneswUtrs <- kochGeneswUtrs %>%
+  dplyr::select(-c(Copy_number, Protein_length))
+```
+
+
+## Gathering the data, exploratory and comparative analysis
+
+Gathering features
+
+```{r, eval= TRUE}
+# Doing the gather of the data frames in an automatic way
+properties.dataframes <- grep("GeneswUtrs", ls(), value = T)
+properties.list <- lapply(properties.dataframes, get)
+properties.list <- lapply(properties.list, function(x) data.frame(x, ensembl_gene_id = row.names(x)))
+names(properties.list) <- properties.dataframes
+# Creating an empty data frame with the identifieres of the 7126 genes annotation
+# In this way we ensure to have a consistent annotation with the genes that match
+properties.df <- data.frame("ensembl_gene_id" = row.names(geneswUtrs), stringsAsFactors = F)
+print("Merging the following properties into a single data frame:")
+for (i in names(properties.list)){
+  property.name <- unlist(strsplit(i, "GeneswUtrs"))
+  print(property.name)
+  property <- properties.list[[i]]
+  properties.df <- merge(properties.df, property, by = "ensembl_gene_id", all.x = T)
+}
+# Count number of complete observations for each property
+nObservations <- plyr::ldply(colSums(!sapply(properties.df[,-1], is.na)))
+colnames(nObservations) <- c("Property", "Observations")
+write.table(x = nObservations, file = "results/S_cerevisiae/numberOfObservations_per_feature.tab", sep = "\t", quote = F, row.names = F)
+```
+
+Joining with the stress consensus classification
+
+```{r, eval = TRUE}
+# Stress responsive genes determined in Stress gene consensus project
+stressGenes <- read.delim("results/S_cerevisiae/stressConsensusTable.tab", stringsAsFactors = F)
+stress.properties.df <- merge(stressGenes, properties.df, by = "ensembl_gene_id", all.y = T)
+# Order properties alphabetically
+stress.properties.df <- stress.properties.df[,c(names(stress.properties.df)[1:4], sort(names(stress.properties.df[5:ncol(stress.properties.df)])))]
+write.table(x = stress.properties.df, file = "results/S_cerevisiae/stressConsensus_Properties_Full_Table.tsv", sep = "\t", quote = F, row.names = F)
+```
+
+# Processing and selection of features. Modelling.
+## Feature selection and data processing
+```{r}
+library(Hmisc)
+library(nnet)
+
+stress.properties.df <- read.delim("results/S_cerevisiae/stressConsensus_Properties_Full_Table.tsv", stringsAsFactors = F)
+properties <- colnames(stress.properties.df)[5:ncol(stress.properties.df)]
+
+prop.names.format <- read.delim("data/original_data/features_info.txt", stringsAsFactors = FALSE)
+
+# Multinomial logistic regression requires low level of collinearity
+# Here, we use pearson correlation to filter our variables that are linearly correlated
+cor_all <- rcorr(as.matrix(stress.properties.df[, 5:ncol(stress.properties.df)]), type = "pearson")
+# Write for plotting
+save(cor_all, file = "data/rdata/pairwise_pearson_allFeatures.rda")
+
+findCorrObs <- function(mat, cutoff = 0.35, numberIter){
+ # Define final object for if
+ finalFeatures <- c()
+ for (i in 1:numberIter){
+ # TRUE/FALSE matrix if value exceds correlation threshold
+ fMat <- abs(mat$r) > cutoff
+ # Number of observations matrix
+ nMat <- mat$n
+ finalFeatures <- unlist(lapply(row.names(fMat), function(feature){
+    tmp = fMat[feature,]
+    tmp = tmp[names(tmp) != feature]
+    if(length(finalFeatures) > 0){
+    tmp = tmp[names(tmp) %in% finalFeatures]
+    }
+    corrFeat = names(which(tmp))
+    nObs = unlist(lapply(corrFeat, function(x){
+      nMat[x,x]
+    }))
+    if(any(!nMat[feature, feature] >= nObs)){
+    } else {
+      feature
+    }
+  }))
+ }
+ return(finalFeatures)
+}
+
+keepFeatures <- findCorrObs(mat = cor_all, cutoff = 0.35, numberIter = 2) # with numberIter = 2 saturation is reached.
+
+keepFeatures <- sub(x = keepFeatures, pattern = "Yeast_conservation", replacement = "Broad_conservation")
+keepFeatures <- sub(x = keepFeatures, pattern = "vst_residual_variance", replacement = "DM")
+
+keepFeatures <- keepFeatures[!keepFeatures %in% c("SM_fitness_defect", "PARS_UTR5", "PARS_UTR3", "Co.expression_degree")] # Filter them because they haveless than 4000 observations and affect too much final number of observations. Also filter co.expression degree (+ control)
+
+# Order alphabetically
+keepFeatures <- keepFeatures[order(keepFeatures)]
+
+stress.properties.df.filtered <- stress.properties.df[,c(1:4,which(colnames(stress.properties.df) %in% keepFeatures))]
+prop.names.format.filtered <- prop.names.format[prop.names.format$Property %in% keepFeatures,]
+  
+# Number of complete observations in total
+table(rowSums(is.na(stress.properties.df.filtered[,5:ncol(stress.properties.df.filtered)])) == 0)
+
+# Scale data
+# Omit NA to have only complete observations
+stress.properties.df.filtered.nar <- na.omit(stress.properties.df.filtered)
+stress.properties.df.filtered.scaled <- cbind(stress.properties.df.filtered.nar[,1:4], apply(stress.properties.df.filtered.nar[,5:ncol(stress.properties.df.filtered.nar)], 2, scale))
+```
+
+## Multinomial logistic regression: Unresponsive, Downregulated, Upregulated
+
+```{r}
+# Multinomial logistic regression and save output for plotting
+cond <- "salt"
+depOverlap <- c("unresponsive", "downregulated", "upregulated")
+
+# Raw data - Leave-one out (AIC)
+for (j in c(0,400)){
+  if(j == 0){
+    raw.data <- stress.properties.df.filtered.nar
+  } else {
+    set.seed(12345)
+    newIds <- c(sample(x = which(stress.properties.df.filtered.nar[,cond] == "unresponsive"), size = j), which(stress.properties.df.filtered.nar[,cond] != "unresponsive"))
+    raw.data <- stress.properties.df.filtered.nar[newIds, ]
+  }
+    
+  raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+  raw.data[,paste0(cond,"_2")] <- relevel(raw.data[,paste0(cond,"_2")], ref = "unresponsive")
+  # Formula    
+  raw.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures, collapse = " + ")))
+  # Multinomial test
+  raw.test <- multinom(raw.f, data = raw.data)
+  raw.test.res <- summary(raw.test)
+  # Compute z-score and p-value and write output to a table
+  z <- raw.test.res$coefficients/raw.test.res$standard.errors
+  p <- (1 - pnorm(abs(z), 0, 1)) * 2
+  raw.test.out <- as.data.frame(rbind(raw.test.res$coefficients, raw.test.res$standard.errors, p))
+  row.names(raw.test.out)[grep(".1", row.names(raw.test.out))] <- gsub(".1", "_standardErrors", row.names(raw.test.out)[grep(".1", row.names(raw.test.out))], fixed = T)
+  row.names(raw.test.out)[grep(".2", row.names(raw.test.out))] <- gsub(".2", "_pValue", row.names(raw.test.out)[grep(".2", row.names(raw.test.out))], fixed = T)
+  write.table(x = raw.test.out,
+                  file = paste0("results/S_cerevisiae/multinomialTestSummary_raw_",cond, "_random_", j, ".tab"), 
+                  quote = F,
+                  sep = "\t",
+                  col.names = NA)
+  
+  # AIC
+  raw.AIC.full <- raw.test$AIC
+  raw.AIC.leave.one <- lapply(keepFeatures, function(x){
+      raw.f.leave.one <- paste0(cond, "_2", " ~ ", paste0(grep(x, keepFeatures, invert = T, value = T), collapse = " + "))
+      raw.test.leave.one <- multinom(raw.f.leave.one, data = raw.data)
+      raw.test.leave.one$AIC
+  })
+  names(raw.AIC.leave.one) <- keepFeatures
+  raw.AIC.leave.one$full <- raw.AIC.full
+  raw.AIC.df <- plyr::ldply(raw.AIC.leave.one, .id = "Property")
+  colnames(raw.AIC.df)[2] = "AIC"
+  # Correct manually variables for the correct format
+  raw.AIC.df$Property_Formatted <- paste0(" ", prop.names.format[match(raw.AIC.df$Property, prop.names.format$Property), "Property_formatted_short"], " ")
+  raw.AIC.df[raw.AIC.df$Property == "full", "Property_Formatted"] <- " Full Model "
+  # Save data frame from latter plotting
+  write.table(raw.AIC.df, paste0("results/S_cerevisiae/dataAIC_", cond, "_random_", j,".tsv"), sep = "\t", quote = F, row.names = F)
+  
+  # Scaled data - Coefficient of regression comparison
+  if(j == 0){
+    scaled.data <- stress.properties.df.filtered.scaled
+  } else {
+    set.seed(12345)
+    newIds <- c(sample(x = which(stress.properties.df.filtered.scaled[,cond] == "unresponsive"), size = j), which(stress.properties.df.filtered.scaled[,cond] != "unresponsive"))
+    scaled.data <- stress.properties.df.filtered.scaled[newIds, ]
+  }
+    scaled.data[,paste0(cond, "_2")] <- factor(scaled.data[,cond])
+    scaled.data[,paste0(cond,"_2")] <- relevel(scaled.data[,paste0(cond,"_2")], ref = "unresponsive")
+    scaled.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures, collapse = " + ")))
+    # Multinomial test
+    scaled.test <- multinom(scaled.f, data = scaled.data)
+    scaled.test.res <- summary(scaled.test)
+    # Compute z-score and p-value and write output to a table
+    z <- scaled.test.res$coefficients/scaled.test.res$standard.errors
+    p <- (1 - pnorm(abs(z), 0, 1)) * 2
+    scaled.test.out <- as.data.frame(rbind(scaled.test.res$coefficients, scaled.test.res$standard.errors, p))
+    row.names(scaled.test.out)[grep(".1", row.names(scaled.test.out))] <- gsub(".1", "_standardErrors", row.names(scaled.test.out)[grep(".1", row.names(scaled.test.out))], fixed = T)
+    row.names(scaled.test.out)[grep(".2", row.names(scaled.test.out))] <- gsub(".2", "_pValue", row.names(scaled.test.out)[grep(".2", row.names(scaled.test.out))], fixed = T)
+    write.table(x = scaled.test.out,
+                file = paste0("results/S_cerevisiae/multinomialTestSummary_scaled_", cond,  "_random_", j, ".tab"), 
+                quote = F,
+                sep = "\t",
+                col.names = NA)
+  
+  # Accuracy of multinomial logistic regression: Split the data into training and validation set
+  # Training Set : Validation Set = 70 : 30 (random)
+  set.seed(12345)
+  train <- sample(nrow(raw.data), 0.7*nrow(raw.data))
+  TrainSet <- raw.data[train,]
+  ValidSet <- raw.data[-train,]
+  # Create a Multinomial Logistic Regression model with default parameters
+  model1 <- multinom(raw.f, data = TrainSet)
+  # Predicting on Validation set
+  predValid <- predict(model1, ValidSet, type = "class")
+  # Checking classification accuracy
+  mean(predValid == ValidSet[, paste0(cond, "_2")])
+  # ROC curve assesment
+  # Calculate the probability of new observations belonging to each class
+  # prediction_for_roc_curve will be a matrix with dimensions data_set_size x number_of_classes
+  prediction_for_roc_curve <- predict(model1, ValidSet, type ="prob")
+  # Save for plotting
+  save(prediction_for_roc_curve, ValidSet, file = paste0("data/rdata/roc_curve_multinomial_scerevisiae_random_",j,".rda"))
+}
+```
+
+## Multinomial logistic regression: Unresponsive, Downregulated, Upregulated (+ coexpression degree)
+
+```{r}
+keepFeatures.c <- c(keepFeatures, "Co.expression_degree") 
+# Order alphabetically
+keepFeatures.c <- keepFeatures.c[order(keepFeatures.c)]
+
+stress.properties.df.filtered.c <- stress.properties.df[,c(1:4,which(colnames(stress.properties.df) %in% keepFeatures.c))]
+prop.names.format.filtered.c <- prop.names.format[prop.names.format$Property %in% keepFeatures.c,]
+  
+# Number of complete observations in total
+table(rowSums(is.na(stress.properties.df.filtered.c[,5:ncol(stress.properties.df.filtered.c)])) == 0)
+
+# Scale data
+# Omit NA to have only complete observations
+stress.properties.df.filtered.nar.c <- na.omit(stress.properties.df.filtered.c)
+
+# Multinomial logistic regression and save output for plotting
+cond <- "salt"
+depOverlap <- c("unresponsive", "downregulated", "upregulated")
+
+# Raw data - Leave-one out (AIC)
+for (j in c(0,400)){
+  if(j == 0){
+    raw.data <- stress.properties.df.filtered.nar.c
+  } else {
+    set.seed(12345)
+    newIds <- c(sample(x = which(stress.properties.df.filtered.nar.c[,cond] == "unresponsive"), size = j), which(stress.properties.df.filtered.nar.c[,cond] != "unresponsive"))
+    raw.data <- stress.properties.df.filtered.nar.c[newIds, ]
+  }
+    
+  raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+  raw.data[,paste0(cond,"_2")] <- relevel(raw.data[,paste0(cond,"_2")], ref = "unresponsive")
+  # Formula    
+  raw.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures.c, collapse = " + ")))
+  # Multinomial test
+  raw.test <- multinom(raw.f, data = raw.data)
+  raw.test.res <- summary(raw.test)
+  # Compute z-score and p-value and write output to a table
+  z <- raw.test.res$coefficients/raw.test.res$standard.errors
+  p <- (1 - pnorm(abs(z), 0, 1)) * 2
+  raw.test.out <- as.data.frame(rbind(raw.test.res$coefficients, raw.test.res$standard.errors, p))
+  row.names(raw.test.out)[grep(".1", row.names(raw.test.out))] <- gsub(".1", "_standardErrors", row.names(raw.test.out)[grep(".1", row.names(raw.test.out))], fixed = T)
+  row.names(raw.test.out)[grep(".2", row.names(raw.test.out))] <- gsub(".2", "_pValue", row.names(raw.test.out)[grep(".2", row.names(raw.test.out))], fixed = T)
+  write.table(x = raw.test.out,
+                  file = paste0("results/S_cerevisiae/multinomialTestSummary_raw_",cond, "_random_", j, "_coexpsDegree.tab"), 
+                  quote = F,
+                  sep = "\t",
+                  col.names = NA)
+  
+  # AIC
+  raw.AIC.full <- raw.test$AIC
+  raw.AIC.leave.one <- lapply(keepFeatures.c, function(x){
+      raw.f.leave.one <- paste0(cond, "_2", " ~ ", paste0(grep(x, keepFeatures.c, invert = T, value = T), collapse = " + "))
+      raw.test.leave.one <- multinom(raw.f.leave.one, data = raw.data)
+      raw.test.leave.one$AIC
+  })
+  names(raw.AIC.leave.one) <- keepFeatures.c
+  raw.AIC.leave.one$full <- raw.AIC.full
+  raw.AIC.df <- plyr::ldply(raw.AIC.leave.one, .id = "Property")
+  colnames(raw.AIC.df)[2] = "AIC"
+  # Correct manually variables for the correct format
+  raw.AIC.df$Property_Formatted <- paste0(" ", prop.names.format[match(raw.AIC.df$Property, prop.names.format$Property), "Property_formatted_short"], " ")
+  raw.AIC.df[raw.AIC.df$Property == "full", "Property_Formatted"] <- " Full Model "
+  # Save data frame from latter plotting
+  write.table(raw.AIC.df, paste0("results/S_cerevisiae/dataAIC_", cond, "_random_", j,"_coexpsDegree.tsv"), sep = "\t", quote = F, row.names = F)
+}
+```
+
+## Logistic regression: Hog1 dependent vs Hog1 independent genes
+
+```{r, eval = TRUE}
+# Logistic regression in Hog1 dependency genes
+cond <- "hog1DepSaltExt"
+depOverlap <- c("unresponsive","induced_Hog1_independent", "induced_Hog1_dependent", "repressed_Hog1_independent" ,"repressed_Hog1_dependent")
+    
+# Logistic regression
+# Raw data - Leave-one out - AIC
+raw.data <- stress.properties.df.filtered.nar
+raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+
+# Scaled data - Model coefficients
+scaled.data <- stress.properties.df.filtered.scaled
+scaled.data[,paste0(cond, "_2")] <- factor(scaled.data[,cond])
+  
+
+for (direction in c("upregulated", "downregulated")){
+  print(direction)
+  print("Raw")
+  raw.data.s <- raw.data[raw.data[,paste0(cond, "_2")] %in% c(paste0(direction, "_Hog1_independent"), paste0(direction, "_Hog1_dependent")),]
+  raw.data.s[, paste0(cond, "_2")] <- droplevels(raw.data.s$hog1DepSaltExt_2)
+  raw.data.s[, paste0(cond, "_2")] <- relevel(raw.data.s[,paste0(cond,"_2")], ref = paste0(direction, "_Hog1_independent"))
+  raw.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures, collapse = " + ")))
+  raw.test.s <- glm(raw.f, data = raw.data.s, family = binomial(link = "logit"))
+  raw.test.res.s <- summary(raw.test.s)
+  write.table(raw.test.res.s$coefficients, 
+              paste0("results/S_cerevisiae/logisticTestSummary_raw_", direction,"_", cond, ".tab"),
+              quote = F,
+              sep = "\t",
+              col.names = NA)
+  
+  # AIC leave-one-out
+  raw.AIC.full <- raw.test.s$aic
+  raw.AIC.leave.one <- lapply(keepFeatures, function(x){
+    raw.f.leave.one <- as.formula(paste0(cond, "_2", " ~ ", paste0(grep(x, keepFeatures, invert = T, value = T), collapse = " + ")))
+    raw.test.leave.one <- glm(raw.f.leave.one, data = raw.data.s, family =  binomial(link = "logit"))
+    raw.test.leave.one$aic
+  })
+  names(raw.AIC.leave.one) <- keepFeatures
+  raw.AIC.leave.one$full <- raw.AIC.full
+  raw.AIC.df <- plyr::ldply(raw.AIC.leave.one, .id = "Property")
+  colnames(raw.AIC.df)[2] = "AIC"
+  # Correct manually variables for the correct format
+  raw.AIC.df$Property_Formatted <- paste0(" ", prop.names.format[match(raw.AIC.df$Property, prop.names.format$Property), "Property_formatted_short"], " ")
+  raw.AIC.df[raw.AIC.df$Property == "full", "Property_Formatted"] <- " Full Model "
+  # Save data frame from latter plotting
+  write.table(raw.AIC.df, paste0("results/S_cerevisiae/dataAIC_", direction, "_", cond, ".tsv"), sep = "\t", quote = F, row.names = F)
+
+  print("Scaled")
+  # Scaled data - Coefficient of regression comparison
+  scaled.data.s <- scaled.data[scaled.data[,paste0(cond, "_2")] %in% c(paste0(direction, "_Hog1_independent"), paste0(direction, "_Hog1_dependent")),]
+  scaled.data.s[, paste0(cond, "_2")] <- droplevels(scaled.data.s$hog1DepSaltExt_2)
+  scaled.data.s[, paste0(cond, "_2")] <- relevel(scaled.data.s[,paste0(cond,"_2")], ref = paste0(direction, "_Hog1_independent"))
+  scaled.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures, collapse = " + ")))
+  # Multinomial test
+  scaled.test <- glm(scaled.f, data = scaled.data.s, family = binomial(link = "logit"))
+  scaled.test.res <- summary(scaled.test)
+  write.table(x = scaled.test.res$coefficients,
+              file = paste0("results/S_cerevisiae/logisticTestSummary_scaled_",direction, "_", cond, ".tab"), 
+              quote = F,
+              sep = "\t",
+              col.names = NA)
+  
+  
+  # Accuracy of logistic regression: Split the data into training and validation set
+  # Training Set : Validation Set = 70 : 30 (random)
+  set.seed(12345)
+  train <- sample(nrow(raw.data.s), 0.7*nrow(raw.data.s), replace = F)
+  TrainSet <- raw.data.s[train,]
+  ValidSet <- raw.data.s[-train,]
+  # Create a Logistic Regression model with default parameters (Careful:Doing it with multinom, since predict does not accept glm. Results are the same)
+  model1 <- multinom(raw.f, data = TrainSet)
+  # Predicting on Validation set
+  predValid <- predict(model1, ValidSet, type = "class")
+  # Checking classification accuracy
+  mean(predValid == ValidSet[, paste0(cond, "_2")])                    
+  # ROC curve assesment
+  # Calculate the probability of new observations belonging to each class
+  # prediction_for_roc_curve will be a matrix with dimensions data_set_size x number_of_classes
+  prediction_for_roc_curve <- predict(model1, ValidSet, type ="prob")
+  save(prediction_for_roc_curve, ValidSet, file = paste0("data/rdata/roc_curve_logistic_scerevisiae_", cond, "_", direction,".rda"))
+}
+```
+
+
+
+
+## Random forest: Unresponsive, Downregulated, Upregulated
+
+```{r, eval = TRUE}
+library(randomForest)
+
+cond <- "salt"
+depOverlap <- c("unresponsive", "donwregulated", "upregulated")
+
+for (j in c(0,400)){
+  # Sample to have a more balanced set
+  if (j == 0){
+    raw.data <- stress.properties.df.filtered.nar
+  } else if (j == 400){
+    set.seed(12345)
+    newIds <- c(sample(x = which(stress.properties.df.filtered.nar[,cond] == "unresponsive"), size = j), which(stress.properties.df.filtered.nar[,cond] != "unresponsive"))
+    raw.data <- stress.properties.df.filtered.nar[newIds, ]
+    } 
+  raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+  raw.data[,paste0(cond,"_2")] <- relevel(raw.data[,paste0(cond,"_2")], ref = "unresponsive")
+  raw.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures, collapse = " + ")))
+  
+  # Whole dataset: Mean decrease in accuracy Random Forest
+  set.seed(12345)
+  fullModel1 <- randomForest(raw.f, data = raw.data, importance = T)
+  write.table(importance(fullModel1), file = paste0("results/S_cerevisiae/modelImportance_randomForest", cond, "_random_",j,".tab"),
+              quote = F, 
+              sep = "\t", 
+              row.names = T, 
+              col.names = NA)
+  
+  
+      
+   # Training Set : Validation Set = 70 : 30 (random)
+   set.seed(12345)
+   train <- sample(nrow(raw.data), 0.7*nrow(raw.data), replace = F)
+   TrainSet <- raw.data[train,]
+   ValidSet <- raw.data[-train,]
+   # Create a Random Forest model with default parameters
+   set.seed(12345)
+   model1 <- randomForest(raw.f, data = TrainSet, importance = T)
+   # Predicting on Validation set
+   predValid <- predict(model1, ValidSet, type = "class")
+   # Checking classification accuracy
+   mean(predValid == ValidSet[, paste0(cond, "_2")])
+   # ROC curve assesment
+   # Calculate the probability of new observations belonging to each class
+   # prediction_for_roc_curve will be a matrix with dimensions data_set_size x number_of_classes
+   prediction_for_roc_curve <- predict(model1, ValidSet, type ="prob")
+   save(prediction_for_roc_curve, ValidSet, file = paste0("data/rdata/roc_curve_randomForest_scerevisiae_random_", j, ".rda"))
+      
+}
+```
+
+## Random forest: Hog1 dependent vs Hog1 independent genes
+
+```{r, eval = TRUE}
+# Random forest in Hog1 dependency genes
+# Logistic regression in Hog1 dependency genes
+cond <- "hog1DepSaltExt"
+depOverlap <- c("unresponsive","induced_Hog1_independent", "induced_Hog1_dependent", "repressed_Hog1_independent" ,"repressed_Hog1_dependent")
+    
+# Random forest
+# Raw data - Leave-one out - AIC
+raw.data <- stress.properties.df.filtered.nar
+raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+
+
+for (direction in c("upregulated", "downregulated")){
+  print(direction)
+  raw.data.s <- raw.data[raw.data[,paste0(cond, "_2")] %in% c(paste0(direction, "_Hog1_independent"), paste0(direction, "_Hog1_dependent")),]
+  raw.data.s[, paste0(cond, "_2")] <- droplevels(raw.data.s$hog1DepSaltExt_2)
+  raw.data.s[, paste0(cond, "_2")] <- relevel(raw.data.s[,paste0(cond,"_2")], ref = paste0(direction, "_Hog1_independent"))
+  raw.f <- as.formula(paste0(cond, "_2", " ~ ", paste0(keepFeatures, collapse = " + ")))
+
+  
+  # Whole data: Mean decrease in accuracy
+  set.seed(12345)
+  fullModel1 <- randomForest(raw.f, data = raw.data.s, importance = T)
+  write.table(importance(fullModel1), 
+              file = paste0("results/S_cerevisiae/modelImportance_randomForest_",cond, "_", direction, ".tab"),
+              quote = F, 
+              sep = "\t", 
+              row.names = T, 
+              col.names = NA)  
+ 
+  
+  # Training Set : Validation Set = 70 : 30 (random)
+  set.seed(12345)
+  train <- sample(nrow(raw.data.s), 0.7*nrow(raw.data.s), replace = F)
+  TrainSet <- raw.data.s[train,]
+  ValidSet <- raw.data.s[-train,]
+  # Create a Random Forest model with default parameters
+  set.seed(12345)
+  model1 <- randomForest(raw.f, data = TrainSet, importance = T)
+  # Predicting on Validation set
+  predValid <- predict(model1, ValidSet, type = "class")
+  # Checking classification accuracy
+  mean(predValid == ValidSet[, paste0(cond, "_2")])                    
+  # ROC curve assesment
+  # Calculate the probability of new observations belonging to each class
+  # prediction_for_roc_curve will be a matrix with dimensions data_set_size x number_of_classes
+  prediction_for_roc_curve <- predict(model1, ValidSet, type ="prob")
+  save(prediction_for_roc_curve, ValidSet, file = paste0("data/rdata/roc_curve_randomForest_scerevisiae_", cond, "_", direction, ".rda"))
+}
+
+```
+
+## Multinomial logistic regression: Univariate modelling (unresponsive, downregulated, upregulated) 
+
+```{r}
+cond <- "salt"
+depOverlap <- c("unresponsive", "downregulated", "upregulated")
+    
+# Multinomial logistic regression: Univariate approach
+# Raw data
+for (j in c(0,400)){
+  if(j == 0){
+    raw.data <- stress.properties.df.filtered.nar
+  } else {
+    set.seed(12345)
+    newIds <- c(sample(x = which(stress.properties.df.filtered.nar[,cond] == "unresponsive"), size = j), which(stress.properties.df.filtered.nar[,cond] != "unresponsive"))
+    raw.data <- stress.properties.df.filtered.nar[newIds, ]
+  }
+    
+raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+raw.data[,paste0(cond,"_2")] <- relevel(raw.data[,paste0(cond,"_2")], ref = "unresponsive")
+
+# For each property, do a model and store the output (AIC, pseudoR2)
+univariate.aic = lapply(keepFeatures, function(ppty){
+      print(ppty)
+      f <- as.formula(paste0(cond, "_2", " ~ ", ppty))
+      raw.test <- multinom(f, data = raw.data)
+      raw.aic = raw.test$AIC
+      return(raw.aic)
+})
+    
+names(univariate.aic) <- keepFeatures
+# AIC  
+univariate.aic = plyr::ldply(univariate.aic)
+colnames(univariate.aic) = c("Property", "AIC")
+univariate.aic$Property_Formatted <- paste0(" ", prop.names.format[match(univariate.aic$Property, prop.names.format$Property), "Property_formatted_short"], " ")
+# Save data frame from latter plotting
+write.table(univariate.aic, paste0("results/S_cerevisiae/dataAIC_univariate_", cond,"_random_",j, ".tsv"), sep = "\t", quote = F, row.names = F)
+}
+
+```
+
+## Logistic regression: Univariate modelling (Hog1 dependent vs independent genes) 
+
+```{r}
+# Logistic regression in Hog1 dependency genes
+cond <- "hog1DepSaltExt"
+depOverlap <- c("unresponsive","induced_Hog1_independent", "induced_Hog1_dependent", "repressed_Hog1_independent" ,"repressed_Hog1_dependent")
+    
+# Logistic regression
+# Raw data
+raw.data <- stress.properties.df.filtered.nar
+raw.data[,paste0(cond, "_2")] <- factor(raw.data[,cond])
+
+for (direction in c("upregulated", "downregulated")){
+  print(direction)
+  raw.data.s <- raw.data[raw.data[,paste0(cond, "_2")] %in% c(paste0(direction, "_Hog1_independent"), paste0(direction, "_Hog1_dependent")),]
+  raw.data.s[, paste0(cond, "_2")] <- droplevels(raw.data.s$hog1DepSaltExt_2)
+  raw.data.s[, paste0(cond, "_2")] <- relevel(raw.data.s[,paste0(cond,"_2")], ref = paste0(direction, "_Hog1_independent"))
+  
+  # For each property, logistic regression and store AIC and pseudoR2
+  univariate.aic = lapply(keepFeatures, function(ppty){
+      print(ppty)
+      f <- as.formula(paste0(cond, "_2", " ~ ", ppty))
+      raw.test <- glm(f, data = raw.data.s, family = binomial(link = "logit"))
+      raw.aic = raw.test$aic
+      return(aic = raw.aic)
+    })
+  
+  names(univariate.aic) <- keepFeatures
+  # AIC  
+  univariate.aic = plyr::ldply(univariate.aic)
+  colnames(univariate.aic) = c("Property", "AIC")
+  univariate.aic$Property_Formatted <- paste0(" ", prop.names.format[match(univariate.aic$Property, prop.names.format$Property), "Property_formatted_short"], " ")
+  # Save data frame from latter plotting
+  write.table(univariate.aic, 
+              paste0("results/S_cerevisiae/dataAIC_univariate_", direction, "_", cond, ".tsv"), 
+              sep = "\t", 
+              quote = F, 
+              row.names = F)
+}
+```
+
+
+
+## TF motif enrichment: Upregulated Hog1 dependent vs independent genes
+
+### Generate responsive genes lists for HOMER motif analysis
+
+```{r, eval = TRUE}
+stressGroupsHog1 = split(stress.properties.df$ensembl_gene_id, stress.properties.df$hog1DepSaltExt)
+lapply(names(stressGroupsHog1)[3:5], function(grp){
+  write.table(x = stressGroupsHog1[[grp]], file = paste0("data/derived_data/", grp, "_toGrep.txt"), row.names = F, quote = F, col.names = F)
+})
+```
+
+### Execute HOMER analysis
+
+```{r}
+system(command = "scr/HOMER_analysis.sh")
+```
+
