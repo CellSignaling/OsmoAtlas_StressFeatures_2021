@@ -4,7 +4,7 @@ Code and data for reproducing the analyses of the paper:
 
 **"Data-driven identification of inherent features of eukaryotic stress-responsive genes"**
 
-![](https://github.com/PabloLatorre/OsmoAtlas_StressFeatures_2021/blob/main/Outline.jpg?raw=true)
+![](https://github.com/PabloLatorre/OsmoAtlas_StressFeatures_2021/blob/main/Outline.jpeg?raw=true)
 
 All requiered data are in the corresponding directories except the following files due to size limitations:
 
